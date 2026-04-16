@@ -1,0 +1,14 @@
+.env
+.env.*
+*.bak
+__pycache__
+**/__pycache__
+*.pyc
+*.pyo
+.git
+.gitignore
+.gstack
+logs/
+data/
+*.md
+.claude
