@@ -107,11 +107,46 @@ class TradingEngine:
         self._stop_event.set()
 
     def get_status(self) -> str:
-        return (
-            f"Cycle #{self._cycle_count} | "
-            f"Known open trades: {len(self._known_open_trades)} | "
-            f"Dry run: {self.dry_run}"
-        )
+        lines = [
+            f"Cycle: #{self._cycle_count}",
+            f"Dry run: {self.dry_run}",
+        ]
+
+        # Account info
+        try:
+            account = self.broker.get_account_info()
+            if account:
+                lines.append(
+                    f"Balance: ${account.balance:.2f} | NAV: ${account.nav:.2f}"
+                )
+                pnl_sign = "+" if account.unrealized_pnl >= 0 else ""
+                lines.append(f"Unrealized P/L: {pnl_sign}${account.unrealized_pnl:.2f}")
+        except Exception:
+            pass
+
+        # Live open trades
+        try:
+            trades = self.broker.get_open_trades()
+        except Exception:
+            trades = list(self._known_open_trades.values())
+
+        if not trades:
+            lines.append("\nNo open positions.")
+        else:
+            lines.append(f"\nOpen positions ({len(trades)}):")
+            for t in trades:
+                direction = "LONG" if t.is_long else "SHORT"
+                pnl_sign = "+" if t.unrealized_pnl >= 0 else ""
+                sl_str = f"{t.stop_loss:.5f}" if t.stop_loss else "none"
+                tp_str = f"{t.take_profit:.5f}" if t.take_profit else "none"
+                lines.append(
+                    f"  {t.pair} {direction} {t.units:,} units"
+                    f" | Entry: {t.entry_price:.5f}"
+                    f" | P/L: {pnl_sign}${t.unrealized_pnl:.2f}"
+                    f" | SL: {sl_str} | TP: {tp_str}"
+                )
+
+        return "\n".join(lines)
 
     # ------------------------------------------------------------------
     # Cycle
