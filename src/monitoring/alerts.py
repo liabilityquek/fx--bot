@@ -244,7 +244,7 @@ class AlertManager:
         self._kill_switch_ref = kill_switch
         self._get_status_fn = get_status_fn
         self._poll_interval = poll_interval_seconds
-        self._last_update_id: int = 0
+        self._last_update_id: int = self._fetch_latest_update_id()
 
         thread = threading.Thread(
             target=self._poll_loop,
@@ -257,13 +257,31 @@ class AlertManager:
             "— commands: /stop, /resume, /status"
         )
 
+    def _fetch_latest_update_id(self) -> int:
+        """Get the current highest update_id so we don't replay old commands on restart."""
+        if not self.bot_token:
+            return 0
+        try:
+            resp = requests.get(
+                f"https://api.telegram.org/bot{self.bot_token}/getUpdates",
+                params={"offset": -1, "timeout": 0},
+                timeout=8,
+            )
+            resp.raise_for_status()
+            results = resp.json().get("result", [])
+            if results:
+                return results[-1]["update_id"]
+        except Exception:
+            pass
+        return 0
+
     def _poll_loop(self) -> None:
         """Background loop: poll Telegram getUpdates and dispatch commands."""
         while True:
             try:
                 self._check_commands()
             except Exception as exc:
-                self.logger.debug(f"Telegram poll error: {exc}")
+                self.logger.warning(f"Telegram poll error: {exc}")
             time.sleep(self._poll_interval)
 
     def _check_commands(self) -> None:
@@ -286,7 +304,7 @@ class AlertManager:
             safe = str(exc)
             if self.bot_token:
                 safe = safe.replace(self.bot_token, "[REDACTED]")
-            self.logger.debug(f"getUpdates failed: {safe}")
+            self.logger.warning(f"getUpdates failed: {safe}")
             return
 
         for update in data.get("result", []):
@@ -297,22 +315,29 @@ class AlertManager:
 
             # Only respond to the configured chat
             if from_chat != str(self.chat_id):
+                self.logger.debug(
+                    f"Ignoring message from chat {from_chat} (expected {self.chat_id})"
+                )
                 continue
 
-            if text in ("/stop", "/kill"):
-                self._handle_stop()
-            elif text in ("/resume", "/start"):
-                self._handle_resume()
-            elif text == "/status":
-                self._handle_status()
-            elif text == "/help":
-                self._send_telegram(
-                    "🤖 *FX Bot Commands*\n\n"
-                    "/stop — activate kill switch (halt trading + close positions)\n"
-                    "/resume — deactivate kill switch (resume trading)\n"
-                    "/status — show current bot status\n"
-                    "/help — show this message"
-                )
+            self.logger.debug(f"Telegram command received: {text!r}")
+            try:
+                if text in ("/stop", "/kill"):
+                    self._handle_stop()
+                elif text in ("/resume", "/start"):
+                    self._handle_resume()
+                elif text == "/status":
+                    self._handle_status()
+                elif text == "/help":
+                    self._send_telegram(
+                        "🤖 *FX Bot Commands*\n\n"
+                        "/stop — activate kill switch (halt trading + close positions)\n"
+                        "/resume — deactivate kill switch (resume trading)\n"
+                        "/status — show current bot status\n"
+                        "/help — show this message"
+                    )
+            except Exception as exc:
+                self.logger.error(f"Error handling Telegram command {text!r}: {exc}")
 
     def _handle_stop(self) -> None:
         """Activate kill switch via Telegram /stop command."""
