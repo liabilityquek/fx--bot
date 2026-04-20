@@ -7,11 +7,12 @@ Includes an optional Telegram command poller that listens for:
 """
 
 import logging
+import os
 import threading
 import time
 import requests
 from typing import Optional, Callable
-from datetime import datetime
+from datetime import datetime, date
 
 from config.settings import settings
 
@@ -226,15 +227,16 @@ class AlertManager:
         self,
         kill_switch=None,
         get_status_fn: Optional[Callable[[], str]] = None,
+        get_calendar_fn: Optional[Callable[[], str]] = None,
         poll_interval_seconds: int = 10
     ) -> None:
         """
-        Start a background daemon thread that polls Telegram for /stop, /resume,
-        and /status commands.
+        Start a background daemon thread that polls Telegram for commands.
 
         Args:
             kill_switch: KillSwitch instance to activate/deactivate
             get_status_fn: Optional callable returning a status string for /status
+            get_calendar_fn: Optional callable returning a formatted calendar string for /calendar
             poll_interval_seconds: How often to poll (default: 10s)
         """
         if not self.enabled:
@@ -243,6 +245,7 @@ class AlertManager:
 
         self._kill_switch_ref = kill_switch
         self._get_status_fn = get_status_fn
+        self._get_calendar_fn = get_calendar_fn
         self._poll_interval = poll_interval_seconds
         self._last_update_id: int = self._fetch_latest_update_id()
 
@@ -254,7 +257,7 @@ class AlertManager:
         thread.start()
         self.logger.info(
             f"📱 Telegram command poller started (interval: {poll_interval_seconds}s) "
-            "— commands: /stop, /resume, /status"
+            "— commands: /stop, /resume, /status, /calendar, /logs"
         )
 
     def _fetch_latest_update_id(self) -> int:
@@ -328,12 +331,18 @@ class AlertManager:
                     self._handle_resume()
                 elif text == "/status":
                     self._handle_status()
+                elif text == "/calendar":
+                    self._handle_calendar()
+                elif text == "/logs":
+                    self._handle_logs()
                 elif text == "/help":
                     self._send_telegram(
                         "🤖 *FX Bot Commands*\n\n"
                         "/stop — activate kill switch (halt trading + close positions)\n"
                         "/resume — deactivate kill switch (resume trading)\n"
                         "/status — show current bot status\n"
+                        "/calendar — today's upcoming economic events\n"
+                        "/logs — today's bot log entries\n"
                         "/help — show this message"
                     )
             except Exception as exc:
@@ -379,3 +388,47 @@ class AlertManager:
             msg += f"\n{extra}"
 
         self._send_telegram(msg)
+
+    def _handle_calendar(self) -> None:
+        """Reply with today's upcoming economic calendar events."""
+        fn = getattr(self, '_get_calendar_fn', None)
+        if not fn:
+            self._send_telegram("📅 *Calendar*\n\nCalendar not configured.")
+            return
+        try:
+            msg = fn()
+            self._send_telegram(msg)
+        except Exception as exc:
+            self._send_telegram(f"📅 *Calendar*\n\nFailed to fetch events: {exc}")
+
+    def _handle_logs(self) -> None:
+        """Reply with today's log entries (last 30 lines)."""
+        log_path = settings.LOG_FILE_PATH
+        today_str = date.today().strftime("%Y-%m-%d")
+
+        if not os.path.exists(log_path):
+            self._send_telegram(f"📋 *Logs*\n\nLog file not found at `{log_path}`.")
+            return
+
+        try:
+            with open(log_path, "r", encoding="utf-8", errors="replace") as f:
+                lines = f.readlines()
+
+            today_lines = [ln.rstrip() for ln in lines if today_str in ln]
+
+            if not today_lines:
+                self._send_telegram(f"📋 *Logs*\n\nNo entries for today ({today_str}).")
+                return
+
+            tail = today_lines[-30:]
+            text = "\n".join(tail)
+            # Telegram message limit is 4096 chars
+            if len(text) > 3800:
+                text = "...\n" + text[-3800:]
+
+            self._send_telegram(
+                f"📋 *Logs — {today_str}*\n\n```\n{text}\n```",
+                parse_mode="Markdown"
+            )
+        except Exception as exc:
+            self._send_telegram(f"📋 *Logs*\n\nFailed to read log file: {exc}")

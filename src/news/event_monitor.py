@@ -1,12 +1,11 @@
 """Economic event monitoring and tracking.
 
-Uses Firecrawl to search for upcoming high-impact economic events.
-Replaces the previous investpy/NewsAPI-based implementation.
+Uses the jb-news API (jblanked.com) to fetch today's economic calendar events.
 """
 
 import logging
-import re
-from typing import List, Dict, Optional
+import requests
+from typing import List, Optional
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 from enum import Enum
@@ -47,7 +46,7 @@ class EconomicEvent:
         return self.minutes_until < 0
 
 
-# High-impact event keywords — any match → VERY_HIGH impact
+# High-impact event keywords — any match upgrades impact to VERY_HIGH
 _VERY_HIGH_KEYWORDS = [
     'NFP', 'Non-Farm Payroll', 'FOMC', 'Federal Reserve', 'Fed Rate',
     'CPI', 'Consumer Price Index', 'GDP', 'Gross Domestic Product',
@@ -59,26 +58,25 @@ _VERY_HIGH_KEYWORDS = [
 # Currency codes we monitor
 _MONITORED_CURRENCIES = ['USD', 'EUR', 'GBP', 'JPY', 'CHF', 'AUD', 'NZD', 'CAD']
 
+# jb-news impact string → EventImpact
+_IMPACT_MAP = {
+    'High': EventImpact.HIGH,
+    'Medium': EventImpact.MEDIUM,
+    'Low': EventImpact.LOW,
+}
+
+_JB_NEWS_BASE = "https://www.jblanked.com/news/api"
+
 
 class EventMonitor:
-    """Monitor and track economic events continuously.
+    """Monitor and track economic events via the jb-news API.
 
-    Uses Firecrawl to search for upcoming high-impact economic events.
-    Falls back to an empty event list when Firecrawl is unavailable —
+    Falls back to an empty event list when the API is unavailable —
     trading continues normally (no false suspensions).
     """
 
     def __init__(self, logger: Optional[logging.Logger] = None):
-        """
-        Initialize event monitor.
-
-        Args:
-            logger: Logger instance
-        """
         self.logger = logger or logging.getLogger('event_monitor')
-
-        # Lazy-import FirecrawlSource to avoid circular imports at module level
-        self._firecrawl = None
 
         # Cache
         self._cached_events: List[EconomicEvent] = []
@@ -91,7 +89,7 @@ class EventMonitor:
         )
 
     # ------------------------------------------------------------------
-    # Public interface (unchanged — SuspensionManager depends on these)
+    # Public interface
     # ------------------------------------------------------------------
 
     def get_upcoming_events(
@@ -100,17 +98,7 @@ class EventMonitor:
         min_impact: EventImpact = EventImpact.MEDIUM,
         force_refresh: bool = False
     ) -> List[EconomicEvent]:
-        """
-        Get upcoming economic events.
-
-        Args:
-            hours_ahead: Look ahead this many hours
-            min_impact: Minimum impact level to include
-            force_refresh: Force refresh from Firecrawl
-
-        Returns:
-            List of economic events
-        """
+        """Get upcoming economic events for today."""
         now = datetime.now(pytz.UTC)
 
         if (not force_refresh
@@ -122,8 +110,7 @@ class EventMonitor:
 
         events = self._fetch_calendar_events()
 
-        # Filter to requested window
-        cutoff = now + timedelta(hours=hours_ahead)
+        # Filter to requested look-ahead window
         events = [e for e in events if e.minutes_until <= hours_ahead * 60]
 
         self._cached_events = events
@@ -136,16 +123,7 @@ class EventMonitor:
         minutes: int = 30,
         min_impact: EventImpact = EventImpact.HIGH
     ) -> List[EconomicEvent]:
-        """
-        Get events that are imminent (within X minutes).
-
-        Args:
-            minutes: Look ahead this many minutes
-            min_impact: Minimum impact level
-
-        Returns:
-            List of imminent events
-        """
+        """Get events that are imminent (within X minutes)."""
         all_events = self.get_upcoming_events(hours_ahead=2)
 
         imminent = [
@@ -164,16 +142,7 @@ class EventMonitor:
         pair: str,
         hours_ahead: int = 24
     ) -> List[EconomicEvent]:
-        """
-        Get events affecting a specific currency pair.
-
-        Args:
-            pair: Trading pair (e.g., 'EUR_USD')
-            hours_ahead: Look ahead hours
-
-        Returns:
-            List of relevant events
-        """
+        """Get events affecting a specific currency pair."""
         all_events = self.get_upcoming_events(hours_ahead=hours_ahead)
         return [e for e in all_events if pair in e.affects_pairs]
 
@@ -182,16 +151,7 @@ class EventMonitor:
         pair: Optional[str] = None,
         minutes_before: Optional[int] = None
     ) -> tuple:
-        """
-        Check if trading should be suspended due to upcoming events.
-
-        Args:
-            pair: Specific pair to check (None = check all)
-            minutes_before: Suspension window in minutes
-
-        Returns:
-            Tuple of (should_suspend, triggering_event)
-        """
+        """Check if trading should be suspended due to upcoming events."""
         if minutes_before is None:
             minutes_before = settings.NEWS_SUSPEND_BEFORE_MINUTES
 
@@ -225,163 +185,90 @@ class EventMonitor:
     # Private helpers
     # ------------------------------------------------------------------
 
-    def _get_firecrawl(self):
-        """Lazy-load FirecrawlSource to avoid circular imports."""
-        if self._firecrawl is None:
-            try:
-                from src.dataflows.firecrawl_source import FirecrawlSource
-                self._firecrawl = FirecrawlSource(logger=self.logger)
-            except Exception as exc:
-                self.logger.warning(f"Could not load FirecrawlSource: {exc}")
-        return self._firecrawl
-
     def _fetch_calendar_events(self) -> List[EconomicEvent]:
-        """
-        Fetch upcoming economic events via Firecrawl search.
-
-        Returns:
-            List of EconomicEvent objects (empty on failure)
-        """
-        firecrawl = self._get_firecrawl()
-        if firecrawl is None:
+        """Fetch today's economic events from the jb-news API."""
+        api_key = settings.JB_NEWS_API_KEY
+        if not api_key:
+            self.logger.warning("JB_NEWS_API_KEY not set — calendar events unavailable")
             return []
+
+        url = f"{_JB_NEWS_BASE}/mql5/calendar/today/"
+        headers = {
+            "Content-Type": "application/json",
+            "Authorization": f"Api-Key {api_key}",
+        }
 
         try:
-            articles = firecrawl.search_fx_news(
-                query="forex economic calendar high impact events this week NFP FOMC CPI",
-                limit=5
-            )
+            resp = requests.get(url, headers=headers, timeout=15)
+            resp.raise_for_status()
+            data = resp.json()
         except Exception as exc:
-            self.logger.warning(f"Firecrawl calendar fetch failed: {exc}")
+            self.logger.warning(f"jb-news calendar fetch failed: {exc}")
             return []
 
-        events: List[EconomicEvent] = []
+        if not isinstance(data, list):
+            self.logger.warning(f"Unexpected jb-news response format: {type(data)}")
+            return []
+
         now = datetime.now(pytz.UTC)
+        events: List[EconomicEvent] = []
 
-        for i, article in enumerate(articles):
+        for item in data:
             try:
-                text = f"{article.title} {article.content}"
-                parsed = self._parse_events_from_text(text, now, base_id=f"fc_{i}")
-                events.extend(parsed)
+                event = self._parse_event(item, now)
+                if event is not None:
+                    events.append(event)
             except Exception as exc:
-                self.logger.debug(f"Event parse error for article {i}: {exc}")
-
-        # Deduplicate by event name + currency
-        seen = set()
-        deduped = []
-        for e in events:
-            key = (e.event_name.lower()[:30], e.currency)
-            if key not in seen:
-                seen.add(key)
-                deduped.append(e)
-
-        return deduped
-
-    def _parse_events_from_text(
-        self,
-        text: str,
-        now: datetime,
-        base_id: str
-    ) -> List[EconomicEvent]:
-        """
-        Parse economic events from scraped markdown text.
-
-        Looks for known high-impact event names and associated currency codes.
-        Since exact timestamps are rarely available in news text, defaults
-        minutes_until to 60 (conservative — will trigger suspension if matched).
-
-        Args:
-            text: Scraped article text
-            now: Current UTC time
-            base_id: ID prefix for generated events
-
-        Returns:
-            List of EconomicEvent objects
-        """
-        events = []
-        text_upper = text.upper()
-
-        for idx, keyword in enumerate(self.high_impact_keywords):
-            if keyword.upper() not in text_upper:
-                continue
-
-            # Find which currencies are mentioned near this keyword
-            # Search a 200-char window around the first occurrence
-            pos = text_upper.find(keyword.upper())
-            window = text_upper[max(0, pos - 100):pos + 200]
-
-            currencies_found = [c for c in _MONITORED_CURRENCIES if c in window]
-            if not currencies_found:
-                # Try the full text
-                currencies_found = [c for c in _MONITORED_CURRENCIES if c in text_upper]
-            if not currencies_found:
-                currencies_found = ['USD']  # fallback
-
-            for currency in currencies_found:
-                # Assign impact
-                impact = self._classify_impact(keyword)
-
-                # Conservative default: 60 min until (triggers suspension window)
-                minutes_until = 60.0
-
-                # Try to extract a more specific time hint (e.g. "in 2 hours", "tomorrow")
-                minutes_until = self._extract_time_hint(window, minutes_until)
-
-                affects_pairs = self._get_affected_pairs(currency)
-
-                event = EconomicEvent(
-                    event_id=f"{base_id}_{idx}_{currency}",
-                    time=now + timedelta(minutes=minutes_until),
-                    currency=currency,
-                    impact=impact,
-                    event_name=keyword,
-                    forecast='',
-                    previous='',
-                    actual='',
-                    affects_pairs=affects_pairs,
-                    minutes_until=minutes_until
-                )
-                events.append(event)
-                break  # One event per keyword match (first currency wins)
+                self.logger.debug(f"Event parse error: {exc}")
 
         return events
 
-    def _classify_impact(self, keyword: str) -> EventImpact:
-        """Map keyword to impact level."""
-        kw_upper = keyword.upper()
-        if any(k.upper() in kw_upper or kw_upper in k.upper()
-               for k in _VERY_HIGH_KEYWORDS):
-            return EventImpact.VERY_HIGH
-        return EventImpact.HIGH
+    def _parse_event(self, item: dict, now: datetime) -> Optional[EconomicEvent]:
+        """Parse a single jb-news calendar item into an EconomicEvent."""
+        name = item.get("Name", "")
+        currency = item.get("Currency", "")
+        event_id = str(item.get("Event_ID", ""))
+        impact_str = item.get("Impact", "Low")
+        date_str = item.get("Date", "")
+        actual = item.get("Actual", 0.0)
+        forecast = item.get("Forecast", 0.0)
+        previous = item.get("Previous", 0.0)
 
-    def _extract_time_hint(self, window: str, default_minutes: float) -> float:
-        """
-        Try to parse a rough time hint from text window.
+        if currency not in _MONITORED_CURRENCIES:
+            return None
 
-        Patterns matched: "in X hours", "in X minutes", "tomorrow", "today"
-        Returns default_minutes when no pattern matched.
-        """
-        window_lower = window.lower()
+        # Parse date format: "2026.04.20 15:30:00"
+        try:
+            event_dt = datetime.strptime(date_str, "%Y.%m.%d %H:%M:%S")
+            event_dt = pytz.UTC.localize(event_dt)
+        except ValueError:
+            return None
 
-        # "in X hours"
-        m = re.search(r'in\s+(\d+)\s+hours?', window_lower)
-        if m:
-            return float(m.group(1)) * 60
+        minutes_until = (event_dt - now).total_seconds() / 60.0
 
-        # "in X minutes"
-        m = re.search(r'in\s+(\d+)\s+min', window_lower)
-        if m:
-            return float(m.group(1))
+        # Map impact string → EventImpact
+        impact = _IMPACT_MAP.get(impact_str, EventImpact.LOW)
 
-        # "tomorrow" — roughly 24h
-        if 'tomorrow' in window_lower:
-            return 24 * 60
+        # Upgrade High → VERY_HIGH if name matches critical keywords
+        if impact == EventImpact.HIGH:
+            name_upper = name.upper()
+            if any(kw.upper() in name_upper for kw in _VERY_HIGH_KEYWORDS):
+                impact = EventImpact.VERY_HIGH
 
-        # "this week" — roughly 3 days
-        if 'this week' in window_lower:
-            return 3 * 24 * 60
+        affects_pairs = self._get_affected_pairs(currency)
 
-        return default_minutes
+        return EconomicEvent(
+            event_id=event_id,
+            time=event_dt,
+            currency=currency,
+            impact=impact,
+            event_name=name,
+            forecast=str(forecast),
+            previous=str(previous),
+            actual=str(actual),
+            affects_pairs=affects_pairs,
+            minutes_until=minutes_until,
+        )
 
     def _get_affected_pairs(self, currency: str) -> List[str]:
         """Get trading pairs affected by a currency."""

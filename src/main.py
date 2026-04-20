@@ -23,6 +23,7 @@ from src.risk.kill_switch import KillSwitch
 from src.risk.weekend_guard import WeekendGuard
 from src.voting.engine import VotingEngine
 from src.execution.engine import TradingEngine, _df_to_candle_list
+from src.news import EventMonitor, EventImpact
 
 
 def parse_args():
@@ -116,6 +117,7 @@ def main():
     kill_switch = KillSwitch(logger)
     weekend_guard = WeekendGuard(logger=logger)
     voting_engine = VotingEngine(logger)
+    event_monitor = EventMonitor(logger)
 
     if args.test:
         if not broker.connect():
@@ -140,9 +142,39 @@ def main():
     )
 
     # Start Telegram command poller
+    def _get_calendar_text() -> str:
+        events = event_monitor.get_upcoming_events(
+            hours_ahead=24,
+            min_impact=EventImpact.MEDIUM,
+            force_refresh=True,
+        )
+        upcoming = [e for e in events if not e.is_past()]
+        if not upcoming:
+            return "📅 *Today's Calendar*\n\nNo upcoming events for today."
+
+        lines = ["📅 *Today's Calendar*\n"]
+        for e in sorted(upcoming, key=lambda x: x.minutes_until):
+            time_str = e.time.strftime("%H:%M UTC")
+            h = int(e.minutes_until // 60)
+            m = int(e.minutes_until % 60)
+            countdown = f"{h}h {m}m" if h > 0 else f"{m}m"
+            parts = [f"F:{e.forecast}"] if e.forecast not in ("0.0", "0", "") else []
+            parts += [f"P:{e.previous}"] if e.previous not in ("0.0", "0", "") else []
+            data_str = " | ".join(parts)
+            line = (
+                f"*{time_str}* (in {countdown})\n"
+                f"{e.currency} — {e.event_name}\n"
+                f"Impact: {e.impact.value.upper()}"
+            )
+            if data_str:
+                line += f" | {data_str}"
+            lines.append(line)
+        return "\n\n".join(lines)
+
     alert_manager.start_command_poller(
         kill_switch=kill_switch,
         get_status_fn=engine.get_status,
+        get_calendar_fn=_get_calendar_text,
     )
 
     try:

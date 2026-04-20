@@ -36,10 +36,11 @@ class Settings:
         return 'https://stream-fxpractice.oanda.com'
 
     # ==========================================
-    # ANTHROPIC / LLM AGENT
+    # GROQ / LLM AGENT
     # ==========================================
-    ANTHROPIC_API_KEY: str = os.getenv('ANTHROPIC_API_KEY', '')
-    LLM_MODEL: str = os.getenv('LLM_MODEL', 'claude-haiku-4-5-20251001')
+    # ANTHROPIC_API_KEY: str = os.getenv('ANTHROPIC_API_KEY', '')
+    GROQ_API_KEY: str = os.getenv('GROQ_API_KEY', '')
+    LLM_MODEL: str = os.getenv('LLM_MODEL', 'llama-3.3-70b-versatile')
     LLM_AGENT_WEIGHT: float = float(os.getenv('LLM_AGENT_WEIGHT', '1.5'))
 
     # ==========================================
@@ -100,6 +101,7 @@ class Settings:
     # ==========================================
     # ECONOMIC CALENDAR
     # ==========================================
+    JB_NEWS_API_KEY: str = os.getenv('JB_NEWS_API_KEY', '')
     NEWS_SUSPEND_BEFORE_MINUTES: int = int(os.getenv('NEWS_SUSPEND_BEFORE_MINUTES', '30'))
     NEWS_RESUME_AFTER_MINUTES: int = int(os.getenv('NEWS_RESUME_AFTER_MINUTES', '15'))
     HIGH_IMPACT_EVENTS: List[str] = os.getenv(
@@ -125,8 +127,8 @@ class Settings:
         if not cls.OANDA_ACCOUNT_ID:
             errors.append("OANDA_ACCOUNT_ID is required")
 
-        if not cls.ANTHROPIC_API_KEY:
-            errors.append("ANTHROPIC_API_KEY is required (LLM agent will fall back to HOLD without it)")
+        if not cls.GROQ_API_KEY:
+            errors.append("GROQ_API_KEY is required (LLM agent will fall back to HOLD without it)")
 
         # Validate each trading pair name
         for pair in cls.TRADING_PAIRS:
@@ -141,7 +143,7 @@ class Settings:
             for error in errors:
                 print(f"  - {error}")
             # ANTHROPIC_API_KEY missing is non-fatal — LLM agent has a fallback
-            fatal = [e for e in errors if 'ANTHROPIC_API_KEY' not in e]
+            fatal = [e for e in errors if 'GROQ_API_KEY' not in e]
             return len(fatal) == 0
 
         return True

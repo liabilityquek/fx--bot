@@ -1,4 +1,4 @@
-"""LLMAgent — Claude Haiku synthesizer.
+"""LLMAgent — Groq LLM synthesizer.
 
 Not a BaseAgent subclass. Called by VotingEngine after tech votes are collected
 so it can see the preliminary vote breakdown as additional context.
@@ -8,6 +8,9 @@ import json
 import logging
 import time
 from typing import Dict, List, Optional
+
+# import anthropic  # replaced by Groq via OpenAI-compatible SDK
+from openai import OpenAI
 
 from .base import AgentVote, Signal
 from .indicators import to_dataframe
@@ -32,7 +35,7 @@ _FALLBACK_VOTE = AgentVote(
 
 
 class LLMAgent:
-    """Synthesizer agent powered by Claude Haiku."""
+    """Synthesizer agent powered by Groq (llama-3.3-70b-versatile)."""
 
     def __init__(self, logger: Optional[logging.Logger] = None):
         self.logger = logger or logging.getLogger("LLMAgent")
@@ -43,19 +46,21 @@ class LLMAgent:
 
     def _init_client(self) -> None:
         try:
-            import anthropic
             from config.settings import settings
 
-            if not settings.ANTHROPIC_API_KEY:
-                self.logger.warning("ANTHROPIC_API_KEY not set — LLM agent disabled")
+            if not settings.GROQ_API_KEY:
+                self.logger.warning("GROQ_API_KEY not set — LLM agent disabled")
                 return
 
-            self._client = anthropic.Anthropic(api_key=settings.ANTHROPIC_API_KEY)
+            self._client = OpenAI(
+                api_key=settings.GROQ_API_KEY,
+                base_url="https://api.groq.com/openai/v1",
+            )
             self._model = settings.LLM_MODEL
             self._available = True
             self.logger.info(f"LLMAgent initialised with model {self._model}")
         except ImportError:
-            self.logger.warning("anthropic package not installed — LLM agent disabled")
+            self.logger.warning("openai package not installed — LLM agent disabled")
         except Exception as exc:
             self.logger.warning(f"LLMAgent init failed: {exc}")
 
@@ -112,14 +117,16 @@ class LLMAgent:
         user_msg = _build_user_message(pair, candles, price, tech_votes)
 
         _last_call_time = time.time()
-        response = self._client.messages.create(
+        response = self._client.chat.completions.create(
             model=self._model,
             max_tokens=256,
-            system=_SYSTEM_PROMPT,
-            messages=[{"role": "user", "content": user_msg}],
+            messages=[
+                {"role": "system", "content": _SYSTEM_PROMPT},
+                {"role": "user", "content": user_msg},
+            ],
         )
 
-        raw_text = response.content[0].text.strip()
+        raw_text = response.choices[0].message.content.strip()
         return _parse_response(raw_text, pair)
 
 

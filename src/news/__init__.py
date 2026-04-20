@@ -1,11 +1,4 @@
-"""News and economic calendar management module.
-
-This module provides:
-- Continuous economic event monitoring
-- Automatic trading suspension logic
-- News impact analysis
-- Event-based position management
-"""
+"""News and economic calendar management module."""
 
 from .event_monitor import (
     EventMonitor,
@@ -17,10 +10,6 @@ from .suspension_manager import (
     SuspensionStatus,
     SuspensionReason
 )
-from .news_filter import (
-    NewsFilter,
-    NewsRelevance
-)
 
 __all__ = [
     'EventMonitor',
@@ -29,6 +18,4 @@ __all__ = [
     'SuspensionManager',
     'SuspensionStatus',
     'SuspensionReason',
-    'NewsFilter',
-    'NewsRelevance',
 ]
