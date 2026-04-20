@@ -1,7 +1,16 @@
-"""LLMAgent — Groq LLM synthesizer.
+"""LLMAgent — Groq (primary) + Anthropic (fallback) synthesizer.
 
-Not a BaseAgent subclass. Called by VotingEngine after tech votes are collected
-so it can see the preliminary vote breakdown as additional context.
+Provider priority:
+  1. Groq  (llama-3.3-70b-versatile by default)
+  2. Anthropic  (claude-haiku-4-5-20251001 by default) — activates when Groq
+     credits are exhausted.
+  3. HOLD fallback — when both providers are credit-exhausted; VotingEngine
+     fires a Telegram alert at this point.
+
+Credit exhaustion is detected by inspecting error messages for quota/billing
+keywords. Transient rate-limit errors (too-many-requests per minute) are NOT
+treated as exhaustion — they fall back to HOLD(0.5) for that single call and
+retry on the next cycle.
 """
 
 import json
@@ -9,7 +18,6 @@ import logging
 import time
 from typing import Dict, List, Optional
 
-# import anthropic  # replaced by Groq via OpenAI-compatible SDK
 from openai import OpenAI
 
 from .base import AgentVote, Signal
@@ -25,48 +33,117 @@ _SYSTEM_PROMPT = (
     "Only vote BUY or SELL if confidence > 0.55, otherwise HOLD."
 )
 
-_FALLBACK_VOTE = AgentVote(
-    agent_name="LLMAgent",
-    pair="",
-    signal=Signal.HOLD,
-    confidence=0.5,
-    reasoning="LLM call failed",
+# Keywords that indicate permanent credit/quota exhaustion (not a transient spike)
+_CREDIT_EXHAUSTION_KEYWORDS = (
+    'quota',
+    'credit',
+    'billing',
+    'insufficient',
+    'payment',
+    'exceeded your',
+    'out of tokens',
+    'balance',
 )
 
 
+def _is_credit_exhausted(exc: Exception) -> bool:
+    """Return True if the exception signals permanent credit/quota exhaustion."""
+    msg = str(exc).lower()
+    # Also catch HTTP 402 Payment Required surfaced by either SDK
+    if hasattr(exc, 'status_code') and getattr(exc, 'status_code', None) == 402:
+        return True
+    return any(kw in msg for kw in _CREDIT_EXHAUSTION_KEYWORDS)
+
+
 class LLMAgent:
-    """Synthesizer agent powered by Groq (llama-3.3-70b-versatile)."""
+    """Synthesizer agent: Groq primary, Anthropic fallback on credit exhaustion."""
 
     def __init__(self, logger: Optional[logging.Logger] = None):
         self.logger = logger or logging.getLogger("LLMAgent")
-        self._client = None
-        self._model: str = ""
-        self._available = False
-        self._init_client()
 
-    def _init_client(self) -> None:
+        # Groq state
+        self._groq_client: Optional[OpenAI] = None
+        self._groq_model: str = ""
+        self._groq_exhausted: bool = False
+
+        # Anthropic state
+        self._anthropic_client = None
+        self._anthropic_model: str = ""
+        self._anthropic_exhausted: bool = False
+
+        self._init_groq()
+        self._init_anthropic()
+
+    # ------------------------------------------------------------------
+    # Initialisation
+    # ------------------------------------------------------------------
+
+    def _init_groq(self) -> None:
         try:
             from config.settings import settings
-
             if not settings.GROQ_API_KEY:
-                self.logger.warning("GROQ_API_KEY not set — LLM agent disabled")
+                self.logger.warning("GROQ_API_KEY not set — Groq provider disabled")
+                self._groq_exhausted = True
                 return
-
-            self._client = OpenAI(
+            self._groq_client = OpenAI(
                 api_key=settings.GROQ_API_KEY,
                 base_url="https://api.groq.com/openai/v1",
             )
-            self._model = settings.LLM_MODEL
-            self._available = True
-            self.logger.info(f"LLMAgent initialised with model {self._model}")
+            self._groq_model = settings.LLM_MODEL
+            self.logger.info(f"LLMAgent: Groq initialised ({self._groq_model})")
         except ImportError:
-            self.logger.warning("openai package not installed — LLM agent disabled")
+            self.logger.warning("openai package not installed — Groq provider disabled")
+            self._groq_exhausted = True
         except Exception as exc:
-            self.logger.warning(f"LLMAgent init failed: {exc}")
+            self.logger.warning(f"LLMAgent: Groq init failed: {exc}")
+            self._groq_exhausted = True
+
+    def _init_anthropic(self) -> None:
+        try:
+            from config.settings import settings
+            if not settings.ANTHROPIC_API_KEY:
+                self.logger.info("ANTHROPIC_API_KEY not set — Anthropic fallback disabled")
+                self._anthropic_exhausted = True
+                return
+            import anthropic as _anthropic_sdk
+            self._anthropic_client = _anthropic_sdk.Anthropic(
+                api_key=settings.ANTHROPIC_API_KEY
+            )
+            self._anthropic_model = settings.ANTHROPIC_LLM_MODEL
+            self.logger.info(
+                f"LLMAgent: Anthropic fallback ready ({self._anthropic_model})"
+            )
+        except ImportError:
+            self.logger.info(
+                "anthropic package not installed — Anthropic fallback disabled"
+            )
+            self._anthropic_exhausted = True
+        except Exception as exc:
+            self.logger.warning(f"LLMAgent: Anthropic init failed: {exc}")
+            self._anthropic_exhausted = True
+
+    # ------------------------------------------------------------------
+    # Public interface
+    # ------------------------------------------------------------------
 
     @property
     def is_available(self) -> bool:
-        return self._available
+        """True if at least one provider can still service requests."""
+        return not (self._groq_exhausted and self._anthropic_exhausted)
+
+    @property
+    def both_exhausted(self) -> bool:
+        """True when both Groq and Anthropic credits are exhausted."""
+        return self._groq_exhausted and self._anthropic_exhausted
+
+    @property
+    def active_provider(self) -> str:
+        """Human-readable name of the currently active provider."""
+        if not self._groq_exhausted:
+            return "groq"
+        if not self._anthropic_exhausted:
+            return "anthropic"
+        return "none"
 
     def vote(
         self,
@@ -75,10 +152,15 @@ class LLMAgent:
         price: float,
         tech_votes: List[AgentVote],
     ) -> AgentVote:
-        """Generate a synthesizer vote.
-
-        Always returns an AgentVote — falls back to HOLD(0.5) on any error.
-        """
+        """Generate a synthesizer vote. Always returns an AgentVote — never raises."""
+        if self.both_exhausted:
+            return AgentVote(
+                agent_name="LLMAgent",
+                pair=pair,
+                signal=Signal.HOLD,
+                confidence=0.5,
+                reasoning="All LLM providers exhausted",
+            )
         try:
             return self._vote(pair, candles, price, tech_votes)
         except Exception as exc:
@@ -91,6 +173,10 @@ class LLMAgent:
                 reasoning="LLM call failed",
             )
 
+    # ------------------------------------------------------------------
+    # Internal voting logic
+    # ------------------------------------------------------------------
+
     def _vote(
         self,
         pair: str,
@@ -100,33 +186,84 @@ class LLMAgent:
     ) -> AgentVote:
         global _last_call_time
 
-        if not self._available or self._client is None:
-            return AgentVote(
-                agent_name="LLMAgent",
-                pair=pair,
-                signal=Signal.HOLD,
-                confidence=0.5,
-                reasoning="LLM unavailable",
-            )
-
-        # Rate-limit guard
+        # Rate-limit guard (shared across providers)
         elapsed = time.time() - _last_call_time
         if elapsed < _MIN_CALL_SPACING_SECONDS:
             time.sleep(_MIN_CALL_SPACING_SECONDS - elapsed)
 
         user_msg = _build_user_message(pair, candles, price, tech_votes)
-
         _last_call_time = time.time()
-        response = self._client.chat.completions.create(
-            model=self._model,
+
+        # Try Groq first
+        if not self._groq_exhausted and self._groq_client is not None:
+            try:
+                return self._call_groq(user_msg, pair)
+            except Exception as exc:
+                if _is_credit_exhausted(exc):
+                    self.logger.warning(
+                        f"LLMAgent: Groq credits exhausted — switching to Anthropic. ({exc})"
+                    )
+                    self._groq_exhausted = True
+                else:
+                    # Transient error — don't switch provider, just return HOLD for this cycle
+                    self.logger.warning(f"LLMAgent: Groq transient error for {pair}: {exc}")
+                    return AgentVote(
+                        agent_name="LLMAgent",
+                        pair=pair,
+                        signal=Signal.HOLD,
+                        confidence=0.5,
+                        reasoning="Groq transient error",
+                    )
+
+        # Try Anthropic fallback
+        if not self._anthropic_exhausted and self._anthropic_client is not None:
+            try:
+                return self._call_anthropic(user_msg, pair)
+            except Exception as exc:
+                if _is_credit_exhausted(exc):
+                    self.logger.warning(
+                        f"LLMAgent: Anthropic credits exhausted — both providers down. ({exc})"
+                    )
+                    self._anthropic_exhausted = True
+                else:
+                    self.logger.warning(f"LLMAgent: Anthropic transient error for {pair}: {exc}")
+                    return AgentVote(
+                        agent_name="LLMAgent",
+                        pair=pair,
+                        signal=Signal.HOLD,
+                        confidence=0.5,
+                        reasoning="Anthropic transient error",
+                    )
+
+        # Both exhausted
+        return AgentVote(
+            agent_name="LLMAgent",
+            pair=pair,
+            signal=Signal.HOLD,
+            confidence=0.5,
+            reasoning="All LLM providers exhausted",
+        )
+
+    def _call_groq(self, user_msg: str, pair: str) -> AgentVote:
+        response = self._groq_client.chat.completions.create(
+            model=self._groq_model,
             max_tokens=256,
             messages=[
                 {"role": "system", "content": _SYSTEM_PROMPT},
                 {"role": "user", "content": user_msg},
             ],
         )
-
         raw_text = response.choices[0].message.content.strip()
+        return _parse_response(raw_text, pair)
+
+    def _call_anthropic(self, user_msg: str, pair: str) -> AgentVote:
+        response = self._anthropic_client.messages.create(
+            model=self._anthropic_model,
+            max_tokens=256,
+            system=_SYSTEM_PROMPT,
+            messages=[{"role": "user", "content": user_msg}],
+        )
+        raw_text = response.content[0].text.strip()
         return _parse_response(raw_text, pair)
 
 
@@ -141,7 +278,6 @@ def _build_user_message(
     tech_votes: List[AgentVote],
 ) -> str:
     """Construct the LLM user message with market context and tech votes."""
-    # Last 10 candles as a mini table (supports both flat and mid formats)
     recent = candles[-10:] if len(candles) >= 10 else candles
     candle_lines = []
     for c in recent:
@@ -156,7 +292,6 @@ def _build_user_message(
         candle_lines.append(f"  O={o} H={h} L={l} C={cl}")
     candle_table = "\n".join(candle_lines)
 
-    # Tech vote summary
     vote_lines = []
     for v in tech_votes:
         vote_lines.append(
@@ -175,7 +310,6 @@ def _build_user_message(
 
 def _parse_response(raw: str, pair: str) -> AgentVote:
     """Parse LLM JSON response defensively."""
-    # Strip markdown code blocks if present
     text = raw.strip()
     if text.startswith("```"):
         lines = text.split("\n")
@@ -184,7 +318,6 @@ def _parse_response(raw: str, pair: str) -> AgentVote:
     try:
         data = json.loads(text)
     except json.JSONDecodeError:
-        # Try to extract JSON object from surrounding text
         start = text.find('{')
         end = text.rfind('}')
         if start != -1 and end != -1:
@@ -195,7 +328,6 @@ def _parse_response(raw: str, pair: str) -> AgentVote:
         else:
             return AgentVote("LLMAgent", pair, Signal.HOLD, 0.5, "JSON parse error")
 
-    # Accept both "vote" and "signal" keys
     vote_str = data.get("vote") or data.get("signal") or "HOLD"
     try:
         signal = Signal[vote_str.upper()]

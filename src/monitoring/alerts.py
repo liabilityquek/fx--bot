@@ -158,6 +158,17 @@ class AlertManager:
         """Send error alert."""
         message = f"⚠️ *Error*\n\n`{error_message}`"
         self.send_alert(message, 'ERROR')
+
+    def alert_llm_credits_exhausted(self):
+        """Send critical alert when both Groq and Anthropic credits are exhausted."""
+        message = (
+            "🔴 *LLM Credits Exhausted*\n\n"
+            "Both Groq and Anthropic API credits are depleted.\n"
+            "The LLM synthesizer agent is now offline.\n\n"
+            "Voting will continue with technical agents only (3 agents, weight 3.0).\n"
+            "Top up credits to restore full functionality."
+        )
+        self.send_alert(message, 'CRITICAL')
     
     def alert_system_start(self):
         """Send system startup alert."""
@@ -228,6 +239,7 @@ class AlertManager:
         kill_switch=None,
         get_status_fn: Optional[Callable[[], str]] = None,
         get_calendar_fn: Optional[Callable[[], str]] = None,
+        get_credits_fn: Optional[Callable[[], str]] = None,
         poll_interval_seconds: int = 10
     ) -> None:
         """
@@ -237,6 +249,7 @@ class AlertManager:
             kill_switch: KillSwitch instance to activate/deactivate
             get_status_fn: Optional callable returning a status string for /status
             get_calendar_fn: Optional callable returning a formatted calendar string for /calendar
+            get_credits_fn: Optional callable returning LLM provider credit status for /credits
             poll_interval_seconds: How often to poll (default: 10s)
         """
         if not self.enabled:
@@ -246,6 +259,7 @@ class AlertManager:
         self._kill_switch_ref = kill_switch
         self._get_status_fn = get_status_fn
         self._get_calendar_fn = get_calendar_fn
+        self._get_credits_fn = get_credits_fn
         self._poll_interval = poll_interval_seconds
         self._last_update_id: int = self._fetch_latest_update_id()
 
@@ -257,7 +271,7 @@ class AlertManager:
         thread.start()
         self.logger.info(
             f"📱 Telegram command poller started (interval: {poll_interval_seconds}s) "
-            "— commands: /stop, /resume, /status, /calendar, /logs"
+            "— commands: /stop, /resume, /status, /calendar, /logs, /credits"
         )
 
     def _fetch_latest_update_id(self) -> int:
@@ -335,6 +349,8 @@ class AlertManager:
                     self._handle_calendar()
                 elif text == "/logs":
                     self._handle_logs()
+                elif text == "/credits":
+                    self._handle_credits()
                 elif text == "/help":
                     self._send_telegram(
                         "🤖 *FX Bot Commands*\n\n"
@@ -343,6 +359,7 @@ class AlertManager:
                         "/status — show current bot status\n"
                         "/calendar — today's upcoming economic events\n"
                         "/logs — today's bot log entries\n"
+                        "/credits — show LLM provider credit status\n"
                         "/help — show this message"
                     )
             except Exception as exc:
@@ -432,3 +449,15 @@ class AlertManager:
             )
         except Exception as exc:
             self._send_telegram(f"📋 *Logs*\n\nFailed to read log file: {exc}")
+
+    def _handle_credits(self) -> None:
+        """Reply with LLM provider credit/availability status."""
+        fn = getattr(self, '_get_credits_fn', None)
+        if not fn:
+            self._send_telegram("💳 *LLM Credits*\n\nCredit status not available.")
+            return
+        try:
+            status_text = fn()
+            self._send_telegram(f"💳 *LLM Provider Status*\n\n`{status_text}`")
+        except Exception as exc:
+            self._send_telegram(f"💳 *LLM Credits*\n\nFailed to fetch status: {exc}")

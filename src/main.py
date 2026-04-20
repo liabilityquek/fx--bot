@@ -116,7 +116,7 @@ def main():
     alert_manager = AlertManager(logger)
     kill_switch = KillSwitch(logger)
     weekend_guard = WeekendGuard(logger=logger)
-    voting_engine = VotingEngine(logger)
+    voting_engine = VotingEngine(logger, alert_manager=alert_manager)
     event_monitor = EventMonitor(logger)
 
     if args.test:
@@ -175,6 +175,7 @@ def main():
         kill_switch=kill_switch,
         get_status_fn=engine.get_status,
         get_calendar_fn=_get_calendar_text,
+        get_credits_fn=voting_engine.get_llm_provider_status,
     )
 
     try:

@@ -7,6 +7,9 @@ Consensus formula:
 
 If LLM agent is unavailable or fails, evaluation uses tech-only weight (3.0)
 so that an LLM outage never permanently blocks trades.
+
+When both LLM providers (Groq + Anthropic) are credit-exhausted, a one-time
+Telegram alert is sent via the injected alert_manager.
 """
 
 import logging
@@ -42,10 +45,12 @@ class VotingEngine:
     MOMENTUM_WEIGHT = 1.0
     # LLM weight comes from settings
 
-    def __init__(self, logger: Optional[logging.Logger] = None):
+    def __init__(self, logger: Optional[logging.Logger] = None, alert_manager=None):
         self.logger = logger or logging.getLogger("VotingEngine")
         self._llm_weight = settings.LLM_AGENT_WEIGHT
         self._threshold = settings.CONSENSUS_THRESHOLD
+        self._alert_manager = alert_manager
+        self._credits_alert_sent = False  # fire the exhaustion alert only once
 
         self._tech = TechAgent(logger)
         self._trend = TrendAgent(logger)
@@ -70,7 +75,19 @@ class VotingEngine:
 
         # 2. LLM synthesizer (sees tech votes)
         llm_vote = self._llm.vote(pair, candles, price, tech_votes)
-        llm_available = self._llm.is_available and llm_vote.reasoning != "LLM call failed"
+        llm_available = self._llm.is_available and llm_vote.reasoning not in (
+            "LLM call failed", "All LLM providers exhausted"
+        )
+
+        # Fire one-shot alert if both providers just became exhausted
+        if self._llm.both_exhausted and not self._credits_alert_sent:
+            self._credits_alert_sent = True
+            self.logger.critical("Both LLM providers (Groq + Anthropic) credits exhausted")
+            if self._alert_manager is not None:
+                try:
+                    self._alert_manager.alert_llm_credits_exhausted()
+                except Exception as alert_exc:
+                    self.logger.warning(f"Failed to send credits-exhausted alert: {alert_exc}")
 
         all_votes = tech_votes + [llm_vote]
 
@@ -97,6 +114,21 @@ class VotingEngine:
             llm_reasoning=llm_vote.reasoning,
             llm_available=llm_available,
         )
+
+    def get_llm_provider_status(self) -> str:
+        """Return a human-readable string describing LLM provider credit status."""
+        groq_ok = not self._llm._groq_exhausted and self._llm._groq_client is not None
+        anthropic_ok = not self._llm._anthropic_exhausted and self._llm._anthropic_client is not None
+
+        groq_line = "Groq: active" if groq_ok else "Groq: exhausted / unavailable"
+        anthropic_line = (
+            "Anthropic: active (fallback)"
+            if anthropic_ok
+            else "Anthropic: exhausted / unavailable"
+        )
+        active_line = f"Active provider: {self._llm.active_provider}"
+
+        return f"{groq_line}\n{anthropic_line}\n{active_line}"
 
     def _tally(
         self,

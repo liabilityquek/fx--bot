@@ -38,10 +38,13 @@ class Settings:
     # ==========================================
     # GROQ / LLM AGENT
     # ==========================================
-    # ANTHROPIC_API_KEY: str = os.getenv('ANTHROPIC_API_KEY', '')
     GROQ_API_KEY: str = os.getenv('GROQ_API_KEY', '')
     LLM_MODEL: str = os.getenv('LLM_MODEL', 'llama-3.3-70b-versatile')
     LLM_AGENT_WEIGHT: float = float(os.getenv('LLM_AGENT_WEIGHT', '1.5'))
+
+    # Anthropic fallback (used when Groq credits are exhausted)
+    ANTHROPIC_API_KEY: str = os.getenv('ANTHROPIC_API_KEY', '')
+    ANTHROPIC_LLM_MODEL: str = os.getenv('ANTHROPIC_LLM_MODEL', 'claude-haiku-4-5-20251001')
 
     # ==========================================
     # VOTING ENGINE
