@@ -416,25 +416,25 @@ class AlertManager:
         """Reply with today's upcoming economic calendar events."""
         fn = getattr(self, '_get_calendar_fn', None)
         if not fn:
-            self._send_telegram("📅 *Calendar*\n\nCalendar not configured.")
+            self._send_telegram("📅 Calendar\n\nCalendar not configured.", parse_mode="")
             return
         try:
             msg = fn()
-            self._send_telegram(msg)
+            self._send_telegram(msg, parse_mode="")
         except Exception as exc:
-            self._send_telegram(f"📅 *Calendar*\n\nFailed to fetch events: {exc}")
+            self._send_telegram(f"📅 Calendar\n\nFailed to fetch events: {exc}", parse_mode="")
 
     def _handle_calhistory(self) -> None:
         """Reply with today's past economic calendar events."""
         fn = getattr(self, '_get_calhistory_fn', None)
         if not fn:
-            self._send_telegram("📅 *Calendar History*\n\nCalendar not configured.")
+            self._send_telegram("📅 Calendar History\n\nCalendar not configured.", parse_mode="")
             return
         try:
             msg = fn()
-            self._send_telegram(msg)
+            self._send_telegram(msg, parse_mode="")
         except Exception as exc:
-            self._send_telegram(f"📅 *Calendar History*\n\nFailed to fetch events: {exc}")
+            self._send_telegram(f"📅 Calendar History\n\nFailed to fetch events: {exc}", parse_mode="")
 
     def _handle_logs(self) -> None:
         """Reply with today's log entries (last 30 lines)."""

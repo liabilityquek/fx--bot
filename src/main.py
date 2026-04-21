@@ -142,10 +142,6 @@ def main():
     )
 
     # Start Telegram command poller
-    def _md_escape(text: str) -> str:
-        """Escape characters that break Telegram Markdown v1."""
-        return text.replace("_", "\\_").replace("*", "\\*").replace("`", "\\`").replace("[", "\\[")
-
     def _get_calendar_text() -> str:
         events = event_monitor.get_upcoming_events(
             hours_ahead=24,
@@ -153,8 +149,8 @@ def main():
             min_impact=EventImpact.MEDIUM,
         )
         if not events:
-            return "📅 *Upcoming Events*\n\nNo upcoming events for the rest of today."
-        lines = ["📅 *Upcoming Events*\n"]
+            return "📅 Upcoming Events\n\nNo upcoming events for the rest of today."
+        lines = ["📅 Upcoming Events\n"]
         for e in sorted(events, key=lambda x: x.minutes_until):
             time_str = e.time.strftime("%H:%M UTC")
             h = int(e.minutes_until // 60)
@@ -163,7 +159,7 @@ def main():
             parts = [f"F:{e.forecast}"] if e.forecast not in ("0.0", "0", "") else []
             parts += [f"P:{e.previous}"] if e.previous not in ("0.0", "0", "") else []
             data_str = " | ".join(parts)
-            line = f"*{time_str}* (in {countdown})\n{e.currency} — {_md_escape(e.event_name)}\nImpact: {e.impact.value.upper()}"
+            line = f"{time_str} (in {countdown})\n{e.currency} — {e.event_name}\nImpact: {e.impact.value.upper()}"
             if data_str:
                 line += f" | {data_str}"
             lines.append(line)
@@ -176,15 +172,15 @@ def main():
             min_impact=EventImpact.MEDIUM,
         )
         if not events:
-            return "📅 *Calendar History*\n\nNo medium/high-impact events have occurred yet today."
-        lines = ["📅 *Calendar History*\n"]
+            return "📅 Calendar History\n\nNo medium/high-impact events have occurred yet today."
+        lines = ["📅 Calendar History\n"]
         for e in sorted(events, key=lambda x: x.minutes_until, reverse=True):
             time_str = e.time.strftime("%H:%M UTC")
             actual_str = f" | A:{e.actual}" if e.actual not in ("0.0", "0", "") else ""
             parts = [f"F:{e.forecast}"] if e.forecast not in ("0.0", "0", "") else []
             parts += [f"P:{e.previous}"] if e.previous not in ("0.0", "0", "") else []
             data_str = " | ".join(parts)
-            line = f"{time_str} ✓ DONE\n{e.currency} — {_md_escape(e.event_name)}\nImpact: {e.impact.value.upper()}"
+            line = f"{time_str} ✓ DONE\n{e.currency} — {e.event_name}\nImpact: {e.impact.value.upper()}"
             if data_str:
                 line += f" | {data_str}"
             if actual_str:
