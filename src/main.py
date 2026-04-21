@@ -146,28 +146,34 @@ def main():
         events = event_monitor.get_upcoming_events(
             hours_ahead=24,
             min_impact=EventImpact.MEDIUM,
-            force_refresh=True,
         )
-        upcoming = [e for e in events if not e.is_past()]
-        if not upcoming:
-            return "📅 *Today's Calendar*\n\nNo upcoming events for today."
+        if not events:
+            return "📅 *Today's Calendar*\n\nNo economic events today."
 
         lines = ["📅 *Today's Calendar*\n"]
-        for e in sorted(upcoming, key=lambda x: x.minutes_until):
+        for e in sorted(events, key=lambda x: x.minutes_until):
             time_str = e.time.strftime("%H:%M UTC")
-            h = int(e.minutes_until // 60)
-            m = int(e.minutes_until % 60)
-            countdown = f"{h}h {m}m" if h > 0 else f"{m}m"
             parts = [f"F:{e.forecast}"] if e.forecast not in ("0.0", "0", "") else []
             parts += [f"P:{e.previous}"] if e.previous not in ("0.0", "0", "") else []
             data_str = " | ".join(parts)
-            line = (
-                f"*{time_str}* (in {countdown})\n"
-                f"{e.currency} — {e.event_name}\n"
-                f"Impact: {e.impact.value.upper()}"
-            )
-            if data_str:
-                line += f" | {data_str}"
+            if e.is_past():
+                actual_str = f" | A:{e.actual}" if e.actual not in ("0.0", "0", "") else ""
+                line = (
+                    f"~{time_str}~ ✓ DONE\n"
+                    f"{e.currency} — {e.event_name}\n"
+                    f"Impact: {e.impact.value.upper()}{actual_str}"
+                )
+            else:
+                h = int(e.minutes_until // 60)
+                m = int(e.minutes_until % 60)
+                countdown = f"{h}h {m}m" if h > 0 else f"{m}m"
+                line = (
+                    f"*{time_str}* (in {countdown})\n"
+                    f"{e.currency} — {e.event_name}\n"
+                    f"Impact: {e.impact.value.upper()}"
+                )
+                if data_str:
+                    line += f" | {data_str}"
             lines.append(line)
         return "\n\n".join(lines)
 

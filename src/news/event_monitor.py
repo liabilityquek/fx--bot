@@ -81,7 +81,7 @@ class EventMonitor:
         # Cache
         self._cached_events: List[EconomicEvent] = []
         self._last_update: Optional[datetime] = None
-        self._update_interval = timedelta(minutes=15)
+        self._update_interval = timedelta(hours=settings.EVENT_CACHE_TTL_HOURS)
 
         # High-impact keywords from settings (merged with hardcoded list)
         self.high_impact_keywords: List[str] = list(
@@ -110,12 +110,13 @@ class EventMonitor:
 
         events = self._fetch_calendar_events()
 
-        # Filter to requested look-ahead window
-        events = [e for e in events if e.minutes_until <= hours_ahead * 60]
+        # Keep today's events: not more than 60 min in the past, within look-ahead window
+        events = [e for e in events if e.minutes_until >= -60 and e.minutes_until <= hours_ahead * 60]
 
         self._cached_events = events
         self._last_update = now
-        self.logger.info(f"EventMonitor: {len(events)} upcoming events fetched")
+        upcoming_count = sum(1 for e in events if e.minutes_until >= 0)
+        self.logger.info(f"EventMonitor: {upcoming_count} upcoming events fetched ({len(events)} total today)")
         return self._filter_events(events, min_impact)
 
     def get_imminent_events(

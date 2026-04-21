@@ -107,6 +107,7 @@ class Settings:
     JB_NEWS_API_KEY: str = os.getenv('JB_NEWS_API_KEY', '')
     NEWS_SUSPEND_BEFORE_MINUTES: int = int(os.getenv('NEWS_SUSPEND_BEFORE_MINUTES', '30'))
     NEWS_RESUME_AFTER_MINUTES: int = int(os.getenv('NEWS_RESUME_AFTER_MINUTES', '15'))
+    EVENT_CACHE_TTL_HOURS: int = int(os.getenv('EVENT_CACHE_TTL_HOURS', '1'))
     HIGH_IMPACT_EVENTS: List[str] = os.getenv(
         'HIGH_IMPACT_EVENTS',
         'NFP,FOMC,GDP,CPI,Interest Rate,Central Bank'
