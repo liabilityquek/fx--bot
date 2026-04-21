@@ -180,7 +180,7 @@ def main():
             parts = [f"F:{e.forecast}"] if e.forecast not in ("0.0", "0", "") else []
             parts += [f"P:{e.previous}"] if e.previous not in ("0.0", "0", "") else []
             data_str = " | ".join(parts)
-            line = f"~{time_str}~ ✓ DONE\n{e.currency} — {e.event_name}\nImpact: {e.impact.value.upper()}"
+            line = f"{time_str} ✓ DONE\n{e.currency} — {e.event_name}\nImpact: {e.impact.value.upper()}"
             if data_str:
                 line += f" | {data_str}"
             if actual_str:
