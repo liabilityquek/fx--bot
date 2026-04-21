@@ -142,6 +142,10 @@ def main():
     )
 
     # Start Telegram command poller
+    def _md_escape(text: str) -> str:
+        """Escape characters that break Telegram Markdown v1."""
+        return text.replace("_", "\\_").replace("*", "\\*").replace("`", "\\`").replace("[", "\\[")
+
     def _get_calendar_text() -> str:
         events = event_monitor.get_upcoming_events(
             hours_ahead=24,
@@ -159,7 +163,7 @@ def main():
             parts = [f"F:{e.forecast}"] if e.forecast not in ("0.0", "0", "") else []
             parts += [f"P:{e.previous}"] if e.previous not in ("0.0", "0", "") else []
             data_str = " | ".join(parts)
-            line = f"*{time_str}* (in {countdown})\n{e.currency} — {e.event_name}\nImpact: {e.impact.value.upper()}"
+            line = f"*{time_str}* (in {countdown})\n{e.currency} — {_md_escape(e.event_name)}\nImpact: {e.impact.value.upper()}"
             if data_str:
                 line += f" | {data_str}"
             lines.append(line)
@@ -180,7 +184,7 @@ def main():
             parts = [f"F:{e.forecast}"] if e.forecast not in ("0.0", "0", "") else []
             parts += [f"P:{e.previous}"] if e.previous not in ("0.0", "0", "") else []
             data_str = " | ".join(parts)
-            line = f"{time_str} ✓ DONE\n{e.currency} — {e.event_name}\nImpact: {e.impact.value.upper()}"
+            line = f"{time_str} ✓ DONE\n{e.currency} — {_md_escape(e.event_name)}\nImpact: {e.impact.value.upper()}"
             if data_str:
                 line += f" | {data_str}"
             if actual_str:
