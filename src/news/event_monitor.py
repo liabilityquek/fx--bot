@@ -95,6 +95,7 @@ class EventMonitor:
     def get_upcoming_events(
         self,
         hours_ahead: int = 24,
+        hours_behind: int = 1,
         min_impact: EventImpact = EventImpact.MEDIUM,
         force_refresh: bool = False
     ) -> List[EconomicEvent]:
@@ -104,19 +105,28 @@ class EventMonitor:
         if (not force_refresh
                 and self._last_update
                 and (now - self._last_update) < self._update_interval
-                and self._cached_events):
+                and self._cached_events is not None):
             self.logger.debug("Using cached events")
-            return self._filter_events(self._cached_events, min_impact)
+            self._update_minutes_until(self._cached_events, now)
+            events = [e for e in self._cached_events
+                      if e.minutes_until >= -(hours_behind * 60)
+                      and e.minutes_until <= hours_ahead * 60]
+            return self._filter_events(events, min_impact)
 
-        events = self._fetch_calendar_events()
+        raw_events = self._fetch_calendar_events()
+        self._update_minutes_until(raw_events, now)
 
-        # Keep today's events: not more than 60 min in the past, within look-ahead window
-        events = [e for e in events if e.minutes_until >= -60 and e.minutes_until <= hours_ahead * 60]
-
-        self._cached_events = events
+        # Cache ALL fetched events — no time filter at storage time
+        self._cached_events = raw_events
         self._last_update = now
+
+        # Apply time window for this specific call
+        events = [e for e in raw_events
+                  if e.minutes_until >= -(hours_behind * 60)
+                  and e.minutes_until <= hours_ahead * 60]
+
         upcoming_count = sum(1 for e in events if e.minutes_until >= 0)
-        self.logger.info(f"EventMonitor: {upcoming_count} upcoming events fetched ({len(events)} total today)")
+        self.logger.info(f"EventMonitor: {upcoming_count} upcoming events fetched ({len(events)} total in window)")
         return self._filter_events(events, min_impact)
 
     def get_imminent_events(
@@ -185,6 +195,11 @@ class EventMonitor:
     # ------------------------------------------------------------------
     # Private helpers
     # ------------------------------------------------------------------
+
+    def _update_minutes_until(self, events: List[EconomicEvent], now: datetime) -> None:
+        """Refresh minutes_until for each event based on current time."""
+        for e in events:
+            e.minutes_until = (e.time - now).total_seconds() / 60.0
 
     def _fetch_calendar_events(self) -> List[EconomicEvent]:
         """Fetch today's economic events from the jb-news API."""

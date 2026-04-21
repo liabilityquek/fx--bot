@@ -239,6 +239,7 @@ class AlertManager:
         kill_switch=None,
         get_status_fn: Optional[Callable[[], str]] = None,
         get_calendar_fn: Optional[Callable[[], str]] = None,
+        get_calhistory_fn: Optional[Callable[[], str]] = None,
         get_credits_fn: Optional[Callable[[], str]] = None,
         poll_interval_seconds: int = 10
     ) -> None:
@@ -249,6 +250,7 @@ class AlertManager:
             kill_switch: KillSwitch instance to activate/deactivate
             get_status_fn: Optional callable returning a status string for /status
             get_calendar_fn: Optional callable returning a formatted calendar string for /calendar
+            get_calhistory_fn: Optional callable returning past events string for /calhistory
             get_credits_fn: Optional callable returning LLM provider credit status for /credits
             poll_interval_seconds: How often to poll (default: 10s)
         """
@@ -259,6 +261,7 @@ class AlertManager:
         self._kill_switch_ref = kill_switch
         self._get_status_fn = get_status_fn
         self._get_calendar_fn = get_calendar_fn
+        self._get_calhistory_fn = get_calhistory_fn
         self._get_credits_fn = get_credits_fn
         self._poll_interval = poll_interval_seconds
         self._last_update_id: int = self._fetch_latest_update_id()
@@ -271,7 +274,7 @@ class AlertManager:
         thread.start()
         self.logger.info(
             f"📱 Telegram command poller started (interval: {poll_interval_seconds}s) "
-            "— commands: /stop, /resume, /status, /calendar, /logs, /credits"
+            "— commands: /stop, /resume, /status, /calendar, /calhistory, /logs, /credits"
         )
 
     def _fetch_latest_update_id(self) -> int:
@@ -347,6 +350,8 @@ class AlertManager:
                     self._handle_status()
                 elif text == "/calendar":
                     self._handle_calendar()
+                elif text == "/calhistory":
+                    self._handle_calhistory()
                 elif text == "/logs":
                     self._handle_logs()
                 elif text == "/credits":
@@ -357,7 +362,8 @@ class AlertManager:
                         "/stop — activate kill switch (halt trading + close positions)\n"
                         "/resume — deactivate kill switch (resume trading)\n"
                         "/status — show current bot status\n"
-                        "/calendar — today's upcoming economic events\n"
+                        "/calendar — upcoming economic events today\n"
+                        "/calhistory — past economic events today\n"
                         "/logs — today's bot log entries\n"
                         "/credits — show LLM provider credit status\n"
                         "/help — show this message"
@@ -417,6 +423,18 @@ class AlertManager:
             self._send_telegram(msg)
         except Exception as exc:
             self._send_telegram(f"📅 *Calendar*\n\nFailed to fetch events: {exc}")
+
+    def _handle_calhistory(self) -> None:
+        """Reply with today's past economic calendar events."""
+        fn = getattr(self, '_get_calhistory_fn', None)
+        if not fn:
+            self._send_telegram("📅 *Calendar History*\n\nCalendar not configured.")
+            return
+        try:
+            msg = fn()
+            self._send_telegram(msg)
+        except Exception as exc:
+            self._send_telegram(f"📅 *Calendar History*\n\nFailed to fetch events: {exc}")
 
     def _handle_logs(self) -> None:
         """Reply with today's log entries (last 30 lines)."""

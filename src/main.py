@@ -145,35 +145,46 @@ def main():
     def _get_calendar_text() -> str:
         events = event_monitor.get_upcoming_events(
             hours_ahead=24,
+            hours_behind=0,
             min_impact=EventImpact.MEDIUM,
         )
         if not events:
-            return "📅 *Today's Calendar*\n\nNo economic events today."
-
-        lines = ["📅 *Today's Calendar*\n"]
+            return "📅 *Upcoming Events*\n\nNo upcoming events for the rest of today."
+        lines = ["📅 *Upcoming Events*\n"]
         for e in sorted(events, key=lambda x: x.minutes_until):
             time_str = e.time.strftime("%H:%M UTC")
+            h = int(e.minutes_until // 60)
+            m = int(e.minutes_until % 60)
+            countdown = f"{h}h {m}m" if h > 0 else f"{m}m"
             parts = [f"F:{e.forecast}"] if e.forecast not in ("0.0", "0", "") else []
             parts += [f"P:{e.previous}"] if e.previous not in ("0.0", "0", "") else []
             data_str = " | ".join(parts)
-            if e.is_past():
-                actual_str = f" | A:{e.actual}" if e.actual not in ("0.0", "0", "") else ""
-                line = (
-                    f"~{time_str}~ ✓ DONE\n"
-                    f"{e.currency} — {e.event_name}\n"
-                    f"Impact: {e.impact.value.upper()}{actual_str}"
-                )
-            else:
-                h = int(e.minutes_until // 60)
-                m = int(e.minutes_until % 60)
-                countdown = f"{h}h {m}m" if h > 0 else f"{m}m"
-                line = (
-                    f"*{time_str}* (in {countdown})\n"
-                    f"{e.currency} — {e.event_name}\n"
-                    f"Impact: {e.impact.value.upper()}"
-                )
-                if data_str:
-                    line += f" | {data_str}"
+            line = f"*{time_str}* (in {countdown})\n{e.currency} — {e.event_name}\nImpact: {e.impact.value.upper()}"
+            if data_str:
+                line += f" | {data_str}"
+            lines.append(line)
+        return "\n\n".join(lines)
+
+    def _get_calhistory_text() -> str:
+        events = event_monitor.get_upcoming_events(
+            hours_ahead=0,
+            hours_behind=24,
+            min_impact=EventImpact.MEDIUM,
+        )
+        if not events:
+            return "📅 *Calendar History*\n\nNo medium/high-impact events have occurred yet today."
+        lines = ["📅 *Calendar History*\n"]
+        for e in sorted(events, key=lambda x: x.minutes_until, reverse=True):
+            time_str = e.time.strftime("%H:%M UTC")
+            actual_str = f" | A:{e.actual}" if e.actual not in ("0.0", "0", "") else ""
+            parts = [f"F:{e.forecast}"] if e.forecast not in ("0.0", "0", "") else []
+            parts += [f"P:{e.previous}"] if e.previous not in ("0.0", "0", "") else []
+            data_str = " | ".join(parts)
+            line = f"~{time_str}~ ✓ DONE\n{e.currency} — {e.event_name}\nImpact: {e.impact.value.upper()}"
+            if data_str:
+                line += f" | {data_str}"
+            if actual_str:
+                line += actual_str
             lines.append(line)
         return "\n\n".join(lines)
 
@@ -181,6 +192,7 @@ def main():
         kill_switch=kill_switch,
         get_status_fn=engine.get_status,
         get_calendar_fn=_get_calendar_text,
+        get_calhistory_fn=_get_calhistory_text,
         get_credits_fn=voting_engine.get_llm_provider_status,
     )
 
