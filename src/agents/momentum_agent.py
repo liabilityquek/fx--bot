@@ -13,6 +13,23 @@ class MomentumAgent(BaseAgent):
     def name(self) -> str:
         return "MomentumAgent"
 
+    def get_indicators(self, pair: str, candles: List[Dict], price: float) -> dict:
+        """Return raw indicator values for use by the DecisionEngine pipeline."""
+        df = to_dataframe(candles)
+        result = {}
+
+        fisher_result = fisher_transform(df, period=10)
+        atr_val = atr(df, 14)
+
+        if fisher_result is not None:
+            fisher_now = fisher_result[0]
+            result['fisher'] = round(fisher_now, 4)
+
+        if atr_val is not None:
+            result['atr'] = atr_val
+
+        return result
+
     def _vote(self, pair: str, candles: List[Dict], price: float) -> AgentVote:
         df = to_dataframe(candles)
 

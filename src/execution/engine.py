@@ -3,10 +3,11 @@
 Every cycle:
   1. Kill switch check
   2. Weekend guard check
-  3. Account info
-  4. For each pair: fetch candles + price → voting_engine.run_vote()
-     → risk checks → place order → Telegram alert with vote breakdown
-  5. Trade close detection (compare known open IDs vs current broker state)
+  3. Holiday guard check
+  4. Account info
+  5. For each pair: fetch candles + price → decision_engine.run_decision()
+     → risk checks → place order → Telegram alert with LLM + reviewer decision
+  6. Trade close detection (compare known open IDs vs current broker state)
 """
 
 import logging
@@ -27,28 +28,30 @@ from src.risk import (
     PositionSizingMethod,
     RiskValidator,
 )
-from src.voting.engine import VoteResult, VotingEngine
+from src.voting.engine import DecisionResult, DecisionEngine
 from src.agents.base import Signal
 
 
 class TradingEngine:
-    """Main execution loop — multi-agent voting architecture."""
+    """Main execution loop — sequential two-agent decision pipeline."""
 
     def __init__(
         self,
         broker: BaseBroker,
-        voting_engine: VotingEngine,
+        decision_engine: DecisionEngine,
         alert_manager: AlertManager,
         kill_switch=None,
         weekend_guard=None,
+        holiday_guard=None,
         logger: Optional[logging.Logger] = None,
         dry_run: bool = False,
     ):
         self.broker = broker
-        self.voting_engine = voting_engine
+        self.decision_engine = decision_engine
         self.alert_manager = alert_manager
         self.kill_switch = kill_switch
         self.weekend_guard = weekend_guard
+        self.holiday_guard = holiday_guard
         self.logger = logger or get_logger("TradingEngine")
         self.dry_run = dry_run
 
@@ -171,7 +174,16 @@ class TradingEngine:
             self.logger.info("Weekend guard: new trades blocked")
             return
 
-        # 3. Account info
+        # 3. Holiday guard
+        if self.holiday_guard and not self.holiday_guard.is_safe_to_trade():
+            self.logger.warning("Holiday guard: market holiday detected — new trades blocked")
+            self.alert_manager.alert_error(
+                "Market holiday detected. New trades blocked for today. "
+                "Existing positions remain open and are protected by broker SL/TP."
+            )
+            return
+
+        # 4. Account info
         account = self.broker.get_account_info()
         if not account:
             self.logger.error("Failed to get account info — skipping cycle")
@@ -248,14 +260,14 @@ class TradingEngine:
             return
         price = (price_info['bid'] + price_info['ask']) / 2
 
-        # Run vote
-        result: VoteResult = self.voting_engine.run_vote(pair, candles, price)
+        # Run decision pipeline
+        result: DecisionResult = self.decision_engine.run_decision(pair, candles, price)
         self._log_vote_result(result)
 
         if result.final_signal == Signal.HOLD:
             self.logger.info(
-                f"{pair}: HOLD (consensus={result.consensus_score:.2f} < "
-                f"{settings.CONSENSUS_THRESHOLD})"
+                f"{pair}: HOLD (confidence={result.confidence:.2f} | "
+                f"reviewer={result.reviewer_verdict})"
             )
             return
 
@@ -419,14 +431,14 @@ class TradingEngine:
     def _send_vote_alert(
         self,
         pair: str,
-        result: VoteResult,
+        result: DecisionResult,
         entry_price: float,
         stop_loss: float,
         take_profit: float,
         units: int,
         dry_run: bool = False,
     ) -> None:
-        """Send plain-text vote breakdown alert to Telegram."""
+        """Send plain-text decision alert to Telegram."""
         prefix = "DRY RUN -- " if dry_run else ""
         lines = [
             f"{prefix}TRADE OPENED -- {pair}",
@@ -434,32 +446,19 @@ class TradingEngine:
             f"Entry: {entry_price:.5f}",
             f"SL: {stop_loss:.5f} | TP: {take_profit:.5f}",
             f"Size: {units:,} units",
-            f"Consensus: {result.consensus_score:.2f}",
+            f"Confidence: {result.confidence:.2f}",
             "",
-            "Votes:",
+            f"LLM: {result.final_signal.value} ({result.confidence:.2f}) | "
+            f"Reviewer: {result.reviewer_verdict} -- {result.reviewer_reason}",
         ]
-        for v in result.agent_votes:
-            if v.agent_name == "LLMAgent":
-                lines.append(
-                    f'  LLMAgent:      {v.signal.value:<4} ({v.confidence:.2f}) -- "{v.reasoning}"'
-                )
-            else:
-                pad = " " * max(0, 14 - len(v.agent_name))
-                lines.append(
-                    f"  {v.agent_name}:{pad}{v.signal.value:<4} ({v.confidence:.2f})"
-                )
-
         text = "\n".join(lines)
         self.alert_manager._send_telegram(text, parse_mode='')
 
-    def _log_vote_result(self, result: VoteResult) -> None:
-        votes_str = " | ".join(
-            f"{v.agent_name}={v.signal.value}({v.confidence:.2f})"
-            for v in result.agent_votes
-        )
+    def _log_vote_result(self, result: DecisionResult) -> None:
         self.logger.info(
             f"{result.pair}: {result.final_signal.value} "
-            f"score={result.consensus_score:.2f} | {votes_str}"
+            f"conf={result.confidence:.2f} | "
+            f"reviewer={result.reviewer_verdict} — {result.reviewer_reason}"
         )
 
     # ------------------------------------------------------------------

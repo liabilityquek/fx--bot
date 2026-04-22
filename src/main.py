@@ -1,7 +1,7 @@
 """Entry point for the multi-agent FX trading bot.
 
 Usage:
-    python src/main.py --test              # Component check, print VoteResult per pair, no trades
+    python src/main.py --test              # Component check, print DecisionResult per pair, no trades
     python src/main.py --live              # Full trading loop
     python src/main.py --live --dry-run   # Full loop but skip actual order placement
     python src/main.py --live --interval 300        # Override cycle interval (seconds)
@@ -21,7 +21,8 @@ from src.monitoring.alerts import AlertManager
 from src.broker.oanda import OandaBroker
 from src.risk.kill_switch import KillSwitch
 from src.risk.weekend_guard import WeekendGuard
-from src.voting.engine import VotingEngine
+from src.risk.holiday_guard import HolidayGuard
+from src.voting.engine import DecisionEngine
 from src.execution.engine import TradingEngine, _df_to_candle_list
 from src.news import EventMonitor, EventImpact
 
@@ -37,8 +38,8 @@ def parse_args():
     return parser.parse_args()
 
 
-def run_test(broker: OandaBroker, voting_engine: VotingEngine, logger) -> bool:
-    """Verify components and print a VoteResult per pair. No trades placed."""
+def run_test(broker: OandaBroker, decision_engine: DecisionEngine, logger) -> bool:
+    """Verify components and print a DecisionResult per pair. No trades placed."""
     logger.info("="*60)
     logger.info("TEST MODE — component verification")
     logger.info("="*60)
@@ -61,7 +62,7 @@ def run_test(broker: OandaBroker, voting_engine: VotingEngine, logger) -> bool:
         return False
     logger.info(f"Account: balance={account.balance:.2f}")
 
-    # Run vote for each pair
+    # Run decision for each pair
     all_ok = True
     for pair in settings.TRADING_PAIRS:
         logger.info(f"\n--- {pair} ---")
@@ -83,17 +84,15 @@ def run_test(broker: OandaBroker, voting_engine: VotingEngine, logger) -> bool:
                 continue
 
             price = (price_info['bid'] + price_info['ask']) / 2
-            result = voting_engine.run_vote(pair, candles, price)
+            result = decision_engine.run_decision(pair, candles, price)
 
-            print(f"\n{pair} VoteResult:")
-            print(f"  Final signal  : {result.final_signal.value}")
-            print(f"  Buy score     : {result.buy_score:.4f}")
-            print(f"  Sell score    : {result.sell_score:.4f}")
-            print(f"  Consensus     : {result.consensus_score:.4f}")
-            print(f"  LLM available : {result.llm_available}")
-            print("  Votes:")
-            for v in result.agent_votes:
-                print(f"    {v.agent_name:<16} {v.signal.value:<4} ({v.confidence:.2f}) — {v.reasoning}")
+            print(f"\n{pair} DecisionResult:")
+            print(f"  Final signal    : {result.final_signal.value}")
+            print(f"  Confidence      : {result.confidence:.4f}")
+            print(f"  LLM reasoning   : {result.llm_reasoning}")
+            print(f"  LLM available   : {result.llm_available}")
+            print(f"  Reviewer verdict: {result.reviewer_verdict}")
+            print(f"  Reviewer reason : {result.reviewer_reason}")
 
         except Exception as exc:
             logger.error(f"{pair}: test failed: {exc}")
@@ -116,14 +115,15 @@ def main():
     alert_manager = AlertManager(logger)
     kill_switch = KillSwitch(logger)
     weekend_guard = WeekendGuard(logger=logger)
-    voting_engine = VotingEngine(logger, alert_manager=alert_manager)
+    holiday_guard = HolidayGuard(logger=logger)
     event_monitor = EventMonitor(logger)
+    decision_engine = DecisionEngine(logger, alert_manager=alert_manager, event_monitor=event_monitor)
 
     if args.test:
         if not broker.connect():
             logger.error("Cannot connect to broker — aborting test")
             sys.exit(1)
-        success = run_test(broker, voting_engine, logger)
+        success = run_test(broker, decision_engine, logger)
         sys.exit(0 if success else 1)
 
     # Live / dry-run mode
@@ -133,10 +133,11 @@ def main():
 
     engine = TradingEngine(
         broker=broker,
-        voting_engine=voting_engine,
+        decision_engine=decision_engine,
         alert_manager=alert_manager,
         kill_switch=kill_switch,
         weekend_guard=weekend_guard,
+        holiday_guard=holiday_guard,
         logger=logger,
         dry_run=args.dry_run,
     )
@@ -193,7 +194,9 @@ def main():
         get_status_fn=engine.get_status,
         get_calendar_fn=_get_calendar_text,
         get_calhistory_fn=_get_calhistory_text,
-        get_credits_fn=voting_engine.get_llm_provider_status,
+        get_credits_fn=decision_engine.get_llm_provider_status,
+        get_analyst_fn=decision_engine.get_analyst_summary,
+        get_reviewer_fn=decision_engine.get_reviewer_summary,
     )
 
     try:

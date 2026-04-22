@@ -1,5 +1,5 @@
-"""Voting engine for multi-agent consensus."""
+"""Decision engine for the two-agent sequential pipeline."""
 
-from .engine import VotingEngine, VoteResult
+from .engine import DecisionEngine, DecisionResult
 
-__all__ = ['VotingEngine', 'VoteResult']
+__all__ = ['DecisionEngine', 'DecisionResult']

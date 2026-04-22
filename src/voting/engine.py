@@ -1,15 +1,17 @@
-"""VotingEngine — tallies agent votes into a consensus signal.
+"""DecisionEngine — sequential two-agent decision pipeline.
 
-Consensus formula:
-    buy_score  = sum(confidence * weight for BUY votes) / total_weight
-    sell_score = sum(confidence * weight for SELL votes) / total_weight
-    HOLD votes count toward total_weight but not numerator.
+Pipeline per cycle:
+  1. TechAgent/TrendAgent/MomentumAgent.get_indicators() → merged indicators dict
+  2. MacroContext.build()                                  → macro dict
+  3. LLMAgent.vote(indicators, macro_context)             → BUY/SELL/HOLD + confidence
+  4. If HOLD or confidence < threshold                    → DecisionResult(HOLD)
+  5. ReviewerAgent.review(indicators, llm_vote)           → APPROVED/ADJUSTED/REJECTED
+  6. Apply reviewer verdict                               → final DecisionResult
 
-If LLM agent is unavailable or fails, evaluation uses tech-only weight (3.0)
-so that an LLM outage never permanently blocks trades.
-
-When both LLM providers (Groq + Anthropic) are credit-exhausted, a one-time
-Telegram alert is sent via the injected alert_manager.
+Provider failure behaviour:
+  - LLM both exhausted      → HOLD + alert_llm_credits_exhausted()
+  - Reviewer both exhausted → HOLD + alert_reviewer_unavailable()
+  - Reviewer transient      → pass-through (APPROVED, reviewer_available=True)
 """
 
 import logging
@@ -18,68 +20,78 @@ from typing import Dict, List, Optional
 
 from src.agents.base import AgentVote, Signal
 from src.agents.llm_agent import LLMAgent
+from src.agents.macro_context import MacroContext
 from src.agents.momentum_agent import MomentumAgent
+from src.agents.reviewer_agent import ReviewResult, ReviewVerdict, ReviewerAgent
 from src.agents.tech_agent import TechAgent
 from src.agents.trend_agent import TrendAgent
 from config.settings import settings
 
 
 @dataclass
-class VoteResult:
+class DecisionResult:
     pair: str
     final_signal: Signal
-    consensus_score: float      # buy_score or sell_score, whichever triggered
-    buy_score: float
-    sell_score: float
-    agent_votes: List[AgentVote]
+    confidence: float           # LLM confidence, possibly adjusted by reviewer
     llm_reasoning: str
     llm_available: bool
+    reviewer_verdict: str       # APPROVED / ADJUSTED / REJECTED / SKIPPED / UNAVAILABLE
+    reviewer_reason: str
+    reviewer_available: bool
 
 
-class VotingEngine:
-    """Orchestrates all agents and produces a consensus VoteResult."""
+class DecisionEngine:
+    """Orchestrates the sequential two-agent decision pipeline."""
 
-    # Agent weights
-    TECH_WEIGHT = 1.0
-    TREND_WEIGHT = 1.0
-    MOMENTUM_WEIGHT = 1.0
-    # LLM weight comes from settings
-
-    def __init__(self, logger: Optional[logging.Logger] = None, alert_manager=None):
-        self.logger = logger or logging.getLogger("VotingEngine")
-        self._llm_weight = settings.LLM_AGENT_WEIGHT
-        self._threshold = settings.CONSENSUS_THRESHOLD
+    def __init__(
+        self,
+        logger: Optional[logging.Logger] = None,
+        alert_manager=None,
+        event_monitor=None,
+    ):
+        self.logger = logger or logging.getLogger("DecisionEngine")
         self._alert_manager = alert_manager
-        self._credits_alert_sent = False  # fire the exhaustion alert only once
+        self._credits_alert_sent = False
 
-        self._tech = TechAgent(logger)
-        self._trend = TrendAgent(logger)
+        self._tech     = TechAgent(logger)
+        self._trend    = TrendAgent(logger)
         self._momentum = MomentumAgent(logger)
-        self._llm = LLMAgent(logger)
+        self._llm      = LLMAgent(logger)
+        self._reviewer = ReviewerAgent(logger)
+        self._macro    = MacroContext(event_monitor=event_monitor, logger=logger)
 
-        self._agent_weights: Dict[str, float] = {
-            "TechAgent":     self.TECH_WEIGHT,
-            "TrendAgent":    self.TREND_WEIGHT,
-            "MomentumAgent": self.MOMENTUM_WEIGHT,
-            "LLMAgent":      self._llm_weight,
-        }
+        self._last_results: dict = {}   # pair -> DecisionResult
 
-    def run_vote(self, pair: str, candles: List[Dict], price: float) -> VoteResult:
-        """Run all agents and return a VoteResult."""
-        # 1. Technical agents (each wrapped — cannot raise)
-        tech_votes: List[AgentVote] = [
-            self._tech.vote(pair, candles, price),
-            self._trend.vote(pair, candles, price),
-            self._momentum.vote(pair, candles, price),
-        ]
+    # ------------------------------------------------------------------
+    # Public interface
+    # ------------------------------------------------------------------
 
-        # 2. LLM synthesizer (sees tech votes)
-        llm_vote = self._llm.vote(pair, candles, price, tech_votes)
+    def run_decision(self, pair: str, candles: List[Dict], price: float) -> DecisionResult:
+        """Run the full decision pipeline and return a DecisionResult."""
+        threshold = settings.CONSENSUS_THRESHOLD
+
+        # 1. Collect indicators from all three tech agents
+        indicators: dict = {}
+        indicators.update(self._tech.get_indicators(pair, candles, price))
+        indicators.update(self._trend.get_indicators(pair, candles, price))
+        indicators.update(self._momentum.get_indicators(pair, candles, price))
+
+        # 2. Build macro context (fails silently)
+        macro: dict = {}
+        try:
+            macro = self._macro.build(pair)
+        except Exception as exc:
+            self.logger.debug(f"MacroContext.build failed for {pair}: {exc}")
+
+        # 3. LLM analyst vote
+        llm_vote: AgentVote = self._llm.vote(
+            pair, candles, price, indicators, macro_context=macro
+        )
         llm_available = self._llm.is_available and llm_vote.reasoning not in (
             "LLM call failed", "All LLM providers exhausted"
         )
 
-        # Fire one-shot alert if both providers just became exhausted
+        # 4. One-shot alert when both LLM providers are permanently exhausted
         if self._llm.both_exhausted and not self._credits_alert_sent:
             self._credits_alert_sent = True
             self.logger.critical("Both LLM providers (Groq + Anthropic) credits exhausted")
@@ -89,76 +101,116 @@ class VotingEngine:
                 except Exception as alert_exc:
                     self.logger.warning(f"Failed to send credits-exhausted alert: {alert_exc}")
 
-        all_votes = tech_votes + [llm_vote]
+        # 5. If HOLD or below confidence threshold — skip reviewer
+        if llm_vote.signal == Signal.HOLD or llm_vote.confidence < threshold:
+            result = DecisionResult(
+                pair=pair,
+                final_signal=Signal.HOLD,
+                confidence=llm_vote.confidence,
+                llm_reasoning=llm_vote.reasoning,
+                llm_available=llm_available,
+                reviewer_verdict='SKIPPED',
+                reviewer_reason='LLM HOLD or confidence below threshold',
+                reviewer_available=True,
+            )
+            self._last_results[pair] = result
+            return result
 
-        # 3. Tally
-        buy_score, sell_score = self._tally(tech_votes, llm_vote, llm_available)
+        # 6. Reviewer
+        review: ReviewResult = self._reviewer.review(
+            pair, candles, price, indicators, llm_vote
+        )
 
-        if buy_score >= self._threshold and buy_score > sell_score:
-            final_signal = Signal.BUY
-            consensus_score = buy_score
-        elif sell_score >= self._threshold and sell_score > buy_score:
-            final_signal = Signal.SELL
-            consensus_score = sell_score
-        else:
+        # 7. Apply reviewer verdict
+        final_signal = llm_vote.signal
+        final_conf   = llm_vote.confidence
+        rev_verdict  = review.verdict.value
+        rev_reason   = review.reason
+
+        if not review.reviewer_available:
+            # Permanently unavailable → HOLD + Telegram alert
             final_signal = Signal.HOLD
-            consensus_score = max(buy_score, sell_score)
+            rev_verdict  = 'UNAVAILABLE'
+            if self._alert_manager is not None:
+                try:
+                    self._alert_manager.alert_reviewer_unavailable(pair, review.reason)
+                except Exception:
+                    pass
+        elif review.verdict == ReviewVerdict.REJECTED:
+            final_signal = Signal.HOLD
+            final_conf   = 0.0
+        elif review.verdict == ReviewVerdict.ADJUSTED:
+            final_conf = review.adjusted_confidence
+            if final_conf < threshold:
+                final_signal = Signal.HOLD
 
-        return VoteResult(
+        result = DecisionResult(
             pair=pair,
             final_signal=final_signal,
-            consensus_score=round(consensus_score, 4),
-            buy_score=round(buy_score, 4),
-            sell_score=round(sell_score, 4),
-            agent_votes=all_votes,
+            confidence=round(final_conf, 4),
             llm_reasoning=llm_vote.reasoning,
             llm_available=llm_available,
+            reviewer_verdict=rev_verdict,
+            reviewer_reason=rev_reason,
+            reviewer_available=review.reviewer_available,
         )
+        self._last_results[pair] = result
+        return result
 
     def get_llm_provider_status(self) -> str:
-        """Return a human-readable string describing LLM provider credit status."""
-        groq_ok = not self._llm._groq_exhausted and self._llm._groq_client is not None
-        anthropic_ok = not self._llm._anthropic_exhausted and self._llm._anthropic_client is not None
+        """Return human-readable status for both analyst and reviewer providers."""
+        groq_ok    = not self._llm._groq_exhausted and self._llm._groq_client is not None
+        ant_ok     = not self._llm._anthropic_exhausted and self._llm._anthropic_client is not None
+        rev_groq_ok = not self._reviewer._groq_exhausted and self._reviewer._groq_client is not None
+        rev_ant_ok  = not self._reviewer._anthropic_exhausted and self._reviewer._anthropic_client is not None
 
-        groq_line = "Groq: active" if groq_ok else "Groq: exhausted / unavailable"
-        anthropic_line = (
-            "Anthropic: active (fallback)"
-            if anthropic_ok
-            else "Anthropic: exhausted / unavailable"
+        return (
+            "=== Analyst ===\n"
+            f"Groq: {'active' if groq_ok else 'exhausted / unavailable'}\n"
+            f"Anthropic: {'active (fallback)' if ant_ok else 'exhausted / unavailable'}\n"
+            f"Active provider: {self._llm.active_provider}\n\n"
+            "=== Reviewer ===\n"
+            f"Groq: {'active' if rev_groq_ok else 'exhausted / unavailable'}\n"
+            f"Anthropic: {'active (fallback)' if rev_ant_ok else 'exhausted / unavailable'}\n"
+            f"Active provider: {self._reviewer.active_provider}"
         )
-        active_line = f"Active provider: {self._llm.active_provider}"
 
-        return f"{groq_line}\n{anthropic_line}\n{active_line}"
+    def get_analyst_summary(self) -> str:
+        """Return last analyst decision per pair — used by /analyst Telegram command."""
+        if not self._last_results:
+            return 'Analyst History\n\nNo decisions yet this session.'
 
-    def _tally(
-        self,
-        tech_votes: List[AgentVote],
-        llm_vote: AgentVote,
-        llm_available: bool,
-    ):
-        """Compute buy_score and sell_score."""
-        buy_num = 0.0
-        sell_num = 0.0
-        total_weight = 0.0
+        lines = ['Analyst History\n']
+        for pair, result in self._last_results.items():
+            lines.append(
+                f'{pair}\n'
+                f'  Signal:     {result.final_signal.value}\n'
+                f'  Confidence: {result.confidence:.2f}\n'
+                f'  Reasoning:  {result.llm_reasoning}\n'
+                f'  LLM:        {"available" if result.llm_available else "unavailable"}'
+            )
+        return '\n\n'.join(lines)
 
-        votes_with_weights = [
-            (v, self._agent_weights.get(v.agent_name, 1.0))
-            for v in tech_votes
-        ]
+    def get_reviewer_summary(self) -> str:
+        """Return last reviewer verdict per pair — used by /reviewer Telegram command."""
+        if not self._last_results:
+            return 'Reviewer History\n\nNo decisions yet this session.'
 
-        # Include LLM only when available
-        if llm_available:
-            votes_with_weights.append((llm_vote, self._llm_weight))
+        verdict_labels = {
+            'APPROVED':    'APPROVED',
+            'ADJUSTED':    'ADJUSTED',
+            'REJECTED':    'REJECTED',
+            'SKIPPED':     'SKIPPED (HOLD/low-conf)',
+            'UNAVAILABLE': 'REVIEWER DOWN',
+        }
 
-        for vote, weight in votes_with_weights:
-            total_weight += weight
-            if vote.signal == Signal.BUY:
-                buy_num += vote.confidence * weight
-            elif vote.signal == Signal.SELL:
-                sell_num += vote.confidence * weight
-            # HOLD: adds to denominator only
-
-        if total_weight == 0:
-            return 0.0, 0.0
-
-        return buy_num / total_weight, sell_num / total_weight
+        lines = ['Reviewer History\n']
+        for pair, result in self._last_results.items():
+            badge = verdict_labels.get(result.reviewer_verdict, result.reviewer_verdict)
+            lines.append(
+                f'{pair}\n'
+                f'  Verdict:    {badge}\n'
+                f'  Confidence: {result.confidence:.2f}\n'
+                f'  Reason:     {result.reviewer_reason}'
+            )
+        return '\n\n'.join(lines)

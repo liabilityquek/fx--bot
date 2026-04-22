@@ -13,6 +13,32 @@ class TrendAgent(BaseAgent):
     def name(self) -> str:
         return "TrendAgent"
 
+    def get_indicators(self, pair: str, candles: List[Dict], price: float) -> dict:
+        """Return raw indicator values for use by the DecisionEngine pipeline."""
+        df = to_dataframe(candles)
+        result = {}
+
+        ema20 = ema(df, 20)
+        ema50 = ema(df, 50)
+        adx_val = adx(df, 14)
+
+        if ema20 is not None:
+            result['ema20'] = ema20
+        if ema50 is not None:
+            result['ema50'] = ema50
+        if adx_val is not None:
+            result['adx'] = round(adx_val, 4)
+
+        if ema20 is not None and ema50 is not None:
+            if ema20 > ema50:
+                result['trend'] = 'bullish'
+            elif ema20 < ema50:
+                result['trend'] = 'bearish'
+            else:
+                result['trend'] = 'neutral'
+
+        return result
+
     def _vote(self, pair: str, candles: List[Dict], price: float) -> AgentVote:
         df = to_dataframe(candles)
 

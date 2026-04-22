@@ -13,6 +13,29 @@ class TechAgent(BaseAgent):
     def name(self) -> str:
         return "TechAgent"
 
+    def get_indicators(self, pair: str, candles: List[Dict], price: float) -> dict:
+        """Return raw indicator values for use by the DecisionEngine pipeline."""
+        df = to_dataframe(candles)
+        result = {}
+
+        rsi_val = rsi(df)
+        if rsi_val is not None:
+            result['rsi'] = round(rsi_val, 4)
+
+        macd_vals = macd(df)
+        if macd_vals is not None:
+            result['macd'] = macd_vals[0]
+            result['macd_signal'] = macd_vals[1]
+            result['macd_hist'] = macd_vals[2]
+
+        bb_vals = bollinger_bands(df)
+        if bb_vals is not None:
+            result['bb_upper'] = bb_vals[0]
+            result['bb_mid'] = bb_vals[1]
+            result['bb_lower'] = bb_vals[2]
+
+        return result
+
     def _vote(self, pair: str, candles: List[Dict], price: float) -> AgentVote:
         df = to_dataframe(candles)
 

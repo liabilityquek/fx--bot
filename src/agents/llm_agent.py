@@ -1,11 +1,14 @@
-"""LLMAgent — Groq (primary) + Anthropic (fallback) synthesizer.
+"""LLMAgent — Groq (primary) + Anthropic (fallback) analyst synthesizer.
 
 Provider priority:
   1. Groq  (llama-3.3-70b-versatile by default)
   2. Anthropic  (claude-haiku-4-5-20251001 by default) — activates when Groq
      credits are exhausted.
-  3. HOLD fallback — when both providers are credit-exhausted; VotingEngine
+  3. HOLD fallback — when both providers are credit-exhausted; DecisionEngine
      fires a Telegram alert at this point.
+
+Receives a merged indicators dict (from TechAgent/TrendAgent/MomentumAgent)
+and optional macro context dict. Produces a BUY/SELL/HOLD AgentVote.
 
 Credit exhaustion is detected by inspecting error messages for quota/billing
 keywords. Transient rate-limit errors (too-many-requests per minute) are NOT
@@ -150,7 +153,8 @@ class LLMAgent:
         pair: str,
         candles: List[Dict],
         price: float,
-        tech_votes: List[AgentVote],
+        indicators: dict,
+        macro_context: Optional[dict] = None,
     ) -> AgentVote:
         """Generate a synthesizer vote. Always returns an AgentVote — never raises."""
         if self.both_exhausted:
@@ -162,7 +166,7 @@ class LLMAgent:
                 reasoning="All LLM providers exhausted",
             )
         try:
-            return self._vote(pair, candles, price, tech_votes)
+            return self._vote(pair, candles, price, indicators, macro_context)
         except Exception as exc:
             self.logger.warning(f"LLMAgent vote failed for {pair}: {exc}")
             return AgentVote(
@@ -182,7 +186,8 @@ class LLMAgent:
         pair: str,
         candles: List[Dict],
         price: float,
-        tech_votes: List[AgentVote],
+        indicators: dict,
+        macro_context: Optional[dict] = None,
     ) -> AgentVote:
         global _last_call_time
 
@@ -191,7 +196,7 @@ class LLMAgent:
         if elapsed < _MIN_CALL_SPACING_SECONDS:
             time.sleep(_MIN_CALL_SPACING_SECONDS - elapsed)
 
-        user_msg = _build_user_message(pair, candles, price, tech_votes)
+        user_msg = _build_analyst_message(pair, candles, price, indicators, macro_context)
         _last_call_time = time.time()
 
         # Try Groq first
@@ -271,13 +276,14 @@ class LLMAgent:
 # Helpers
 # ---------------------------------------------------------------------------
 
-def _build_user_message(
+def _build_analyst_message(
     pair: str,
     candles: List[Dict],
     price: float,
-    tech_votes: List[AgentVote],
+    indicators: dict,
+    macro_context: Optional[dict] = None,
 ) -> str:
-    """Construct the LLM user message with market context and tech votes."""
+    """Construct the LLM analyst message with market context and indicator values."""
     recent = candles[-10:] if len(candles) >= 10 else candles
     candle_lines = []
     for c in recent:
@@ -292,20 +298,36 @@ def _build_user_message(
         candle_lines.append(f"  O={o} H={h} L={l} C={cl}")
     candle_table = "\n".join(candle_lines)
 
-    vote_lines = []
-    for v in tech_votes:
-        vote_lines.append(
-            f"  {v.agent_name}: {v.signal.value} conf={v.confidence:.2f} | {v.reasoning}"
-        )
-    vote_summary = "\n".join(vote_lines) if vote_lines else "  (none)"
+    ind_lines = []
+    for key, val in indicators.items():
+        if isinstance(val, float):
+            ind_lines.append(f"  {key}: {val:.5f}")
+        else:
+            ind_lines.append(f"  {key}: {val}")
+    ind_summary = "\n".join(ind_lines) if ind_lines else "  (none)"
 
-    return (
+    msg = (
         f"Pair: {pair}\n"
         f"Current price: {price}\n\n"
         f"Last 10 candles (H1):\n{candle_table}\n\n"
-        f"Technical agent votes:\n{vote_summary}\n\n"
-        "Based on the above, provide your synthesized trading signal as JSON."
+        f"Technical indicators:\n{ind_summary}\n\n"
     )
+
+    if macro_context:
+        macro_lines = []
+        if macro_context.get('rate_differential'):
+            macro_lines.append(f"  Rate differential: {macro_context['rate_differential']}")
+        if macro_context.get('carry_bias'):
+            macro_lines.append(f"  Carry bias: {macro_context['carry_bias']}")
+        if macro_context.get('recent_news'):
+            macro_lines.append(f"  Recent news:\n{macro_context['recent_news']}")
+        if macro_context.get('upcoming_events'):
+            macro_lines.append(f"  Upcoming events:\n{macro_context['upcoming_events']}")
+        if macro_lines:
+            msg += "Macro context:\n" + "\n".join(macro_lines) + "\n\n"
+
+    msg += "Based on the above, provide your synthesized trading signal as JSON."
+    return msg
 
 
 def _parse_response(raw: str, pair: str) -> AgentVote:
