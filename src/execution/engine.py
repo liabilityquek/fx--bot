@@ -304,7 +304,7 @@ class TradingEngine:
         units = size_result.units
 
         # Risk validator
-        exposure_report = self.exposure_tracker.get_report()
+        exposure_report = self.exposure_tracker.get_current_exposure()
         validation = self.risk_validator.validate_trade(
             pair=pair,
             units=units,
