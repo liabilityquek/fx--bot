@@ -28,6 +28,8 @@ from src.risk import (
     PositionSizingMethod,
     RiskValidator,
 )
+from src.risk.emergency_controller import EmergencyRiskController, ShutdownReason
+from src.execution.trade_manager import TradeManager
 from src.voting.engine import DecisionResult, DecisionEngine
 from src.agents.base import Signal
 
@@ -59,11 +61,18 @@ class TradingEngine:
         self.risk_validator = RiskValidator(self.logger)
         self.position_sizer = PositionSizer(self.logger)
         self.exposure_tracker = ExposureTracker(self.logger)
+        self.emergency_controller = EmergencyRiskController(logger=self.logger)
+        self.trade_manager = TradeManager(
+            broker=self.broker,
+            logger=self.logger,
+            alert_manager=self.alert_manager,
+        )
 
         # State
         self._stop_event = threading.Event()
         self._cycle_count = 0
         self._known_open_trades: Dict[str, Trade] = {}   # trade_id → Trade
+        self._initial_balance: Optional[float] = None
 
         # Daily loss circuit breaker
         self._daily_loss_start_balance: Optional[float] = None
@@ -174,14 +183,15 @@ class TradingEngine:
             self.logger.info("Weekend guard: new trades blocked")
             return
 
-        # 3. Holiday guard
+        # 3. Holiday guard — flag only, do not return; risk layers still run
+        is_holiday = False
         if self.holiday_guard and not self.holiday_guard.is_safe_to_trade():
+            is_holiday = True
             self.logger.warning("Holiday guard: market holiday detected — new trades blocked")
             self.alert_manager.alert_error(
                 "Market holiday detected. New trades blocked for today. "
                 "Existing positions remain open and are protected by broker SL/TP."
             )
-            return
 
         # 4. Account info
         account = self.broker.get_account_info()
@@ -189,46 +199,65 @@ class TradingEngine:
             self.logger.error("Failed to get account info — skipping cycle")
             return
 
+        # Set initial balance once for drawdown tracking
+        if self._initial_balance is None:
+            self._initial_balance = account.balance
+            self.logger.info(f"Initial balance recorded: {self._initial_balance:.2f}")
+
         self.logger.info(
             f"Account: balance={account.balance:.2f} "
             f"NAV={account.nav:.2f} "
             f"open_trades={account.open_trade_count}"
         )
 
-        # Daily loss circuit breaker
-        today = datetime.utcnow().strftime('%Y-%m-%d')
-        if self._daily_loss_date != today:
-            self._daily_loss_date = today
-            self._daily_loss_start_balance = account.balance
-            self._daily_loss_halted = False
+        # Daily loss circuit breaker (normal days only — no new trades to halt on holidays)
+        if not is_holiday:
+            today = datetime.utcnow().strftime('%Y-%m-%d')
+            if self._daily_loss_date != today:
+                self._daily_loss_date = today
+                self._daily_loss_start_balance = account.balance
+                self._daily_loss_halted = False
 
-        if self._daily_loss_start_balance and not self._daily_loss_halted:
-            daily_loss_pct = (
-                (self._daily_loss_start_balance - account.nav) / self._daily_loss_start_balance
-            )
-            if daily_loss_pct >= settings.MAX_DAILY_LOSS_PERCENT:
-                self.logger.critical(
-                    f"Daily loss limit reached ({daily_loss_pct:.1%}) — halting new trades today"
+            if self._daily_loss_start_balance and not self._daily_loss_halted:
+                daily_loss_pct = (
+                    (self._daily_loss_start_balance - account.nav) / self._daily_loss_start_balance
                 )
-                self._daily_loss_halted = True
-                self.alert_manager.alert_error(
-                    f"Daily loss limit reached ({daily_loss_pct:.1%}) — trading halted"
-                )
+                if daily_loss_pct >= settings.MAX_DAILY_LOSS_PERCENT:
+                    self.logger.critical(
+                        f"Daily loss limit reached ({daily_loss_pct:.1%}) — halting new trades today"
+                    )
+                    self._daily_loss_halted = True
+                    self.alert_manager.alert_error(
+                        f"Daily loss limit reached ({daily_loss_pct:.1%}) — trading halted"
+                    )
 
-        # 4. Update exposure tracker
+        # Update exposure tracker
         positions = self.broker.get_positions()
         self.exposure_tracker.update_positions(positions, account.balance)
 
-        # 5. Process each pair
-        for pair in settings.TRADING_PAIRS:
-            if self._daily_loss_halted:
-                break
-            try:
-                self._process_pair(pair, account, positions)
-            except Exception as exc:
-                self.logger.error(f"Error processing {pair}: {exc}")
+        # Layer 3 — Emergency risk check (normal days and holidays)
+        try:
+            self._run_emergency_check(account, positions)
+        except Exception as exc:
+            self.logger.error(f"Emergency check error: {exc}")
 
-        # 6. Trade close detection
+        # 5. Process each pair (normal days only)
+        if not is_holiday:
+            for pair in settings.TRADING_PAIRS:
+                if self._daily_loss_halted:
+                    break
+                try:
+                    self._process_pair(pair, account, positions)
+                except Exception as exc:
+                    self.logger.error(f"Error processing {pair}: {exc}")
+
+        # Layer 2 + 6 — Trailing stop updates and age alerts (normal days and holidays)
+        try:
+            self.trade_manager.update_all_trades()
+        except Exception as exc:
+            self.logger.error(f"Trade manager update error: {exc}")
+
+        # Layer 4 — Trade close detection (normal days and holidays)
         try:
             self._check_closed_trades()
         except Exception as exc:
@@ -389,6 +418,36 @@ class TradingEngine:
         for t in current_trades:
             if t.trade_id not in self._known_open_trades:
                 self._known_open_trades[t.trade_id] = t
+
+    # ------------------------------------------------------------------
+    # Emergency risk check
+    # ------------------------------------------------------------------
+
+    def _run_emergency_check(self, account, positions) -> None:
+        """Layer 3 — evaluate emergency risk conditions; close all positions if required.
+
+        Runs on both normal trading days and public holidays so open positions
+        are never left unprotected by the bot's risk layer.
+        """
+        exposure_report = self.exposure_tracker.get_current_exposure()
+
+        status = self.emergency_controller.check_emergency_conditions(
+            account_balance=account.balance,
+            initial_balance=self._initial_balance or account.balance,
+            open_positions=positions,
+            current_exposure_percent=exposure_report.total_exposure_percent,
+            unrealized_pnl=account.unrealized_pnl,
+        )
+
+        if status.requires_shutdown:
+            reason = status.shutdown_reason.value if status.shutdown_reason else "risk_limit"
+            self.logger.critical(
+                f"Emergency shutdown required: {reason} — closing all positions"
+            )
+            self.alert_manager.alert_error(
+                f"EMERGENCY SHUTDOWN: {reason} — closing all positions now"
+            )
+            self.trade_manager.emergency_close_all(reason=reason)
 
     # ------------------------------------------------------------------
     # SL/TP calculation
