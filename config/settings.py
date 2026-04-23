@@ -80,7 +80,7 @@ class Settings:
 
     TIMEFRAME: str = os.getenv('TIMEFRAME', 'H1')
     INITIAL_CAPITAL: float = float(os.getenv('INITIAL_CAPITAL', '10000'))
-    MAX_LEVERAGE: int = int(os.getenv('MAX_LEVERAGE', '30'))
+    MAX_LEVERAGE: int = int(os.getenv('MAX_LEVERAGE', '20'))
 
     # Execution interval derived from timeframe (seconds)
     EXECUTION_INTERVAL_SECONDS: int = int(os.getenv('EXECUTION_INTERVAL_SECONDS', '3600'))
@@ -111,11 +111,11 @@ class Settings:
     JB_NEWS_API_KEY: str = os.getenv('JB_NEWS_API_KEY', '')
     # Rule 1 & 2 — suspension window
     NEWS_SUSPEND_BEFORE_MINUTES: int = int(os.getenv('NEWS_SUSPEND_BEFORE_MINUTES', '30'))
-    NEWS_RESUME_AFTER_MINUTES: int = int(os.getenv('NEWS_RESUME_AFTER_MINUTES', '15'))
+    NEWS_RESUME_AFTER_MINUTES: int = int(os.getenv('NEWS_RESUME_AFTER_MINUTES', '30'))
     EVENT_CACHE_TTL_HOURS: int = int(os.getenv('EVENT_CACHE_TTL_HOURS', '1'))
     # Rule 3 — news risk agent (pre-event LLM close decision)
     NEWS_RISK_CLOSE_THRESHOLD: float = float(os.getenv('NEWS_RISK_CLOSE_THRESHOLD', '0.65'))
-    NEWS_RISK_MINUTES_BEFORE: int = int(os.getenv('NEWS_RISK_MINUTES_BEFORE', '15'))
+    NEWS_RISK_MINUTES_BEFORE: int = int(os.getenv('NEWS_RISK_MINUTES_BEFORE', '20'))
     NEWS_RISK_POLL_INTERVAL_SECONDS: int = int(os.getenv('NEWS_RISK_POLL_INTERVAL_SECONDS', '120'))
     HIGH_IMPACT_EVENTS: List[str] = os.getenv(
         'HIGH_IMPACT_EVENTS',
