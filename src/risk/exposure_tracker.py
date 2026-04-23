@@ -135,13 +135,16 @@ class ExposureTracker:
             # Get current price for valuation
             current_price = current_prices.get(pair) if current_prices else None
             
-            # Calculate USD value (simplified - assumes quote currency is USD for now)
-            # TODO: Enhance with actual cross-rate calculations
+            # Calculate USD value of position
             if quote_currency == 'USD':
+                # EUR_USD, GBP_USD, AUD_USD: units are in base currency, convert to USD
                 value_usd = abs_units * (current_price if current_price else 1.0)
+            elif base_currency == 'USD':
+                # USD_JPY, USD_CHF: units are in USD — 1 unit = 1 USD, no conversion needed
+                value_usd = abs_units
             else:
-                # Approximate for non-USD quote currencies
-                value_usd = abs_units * 0.0001  # Rough estimate
+                # Cross pairs not currently traded — rough fallback
+                value_usd = abs_units * 0.0001
             
             # Track base currency exposure
             if base_currency not in currency_data:

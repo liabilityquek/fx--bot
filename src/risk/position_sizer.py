@@ -1,7 +1,7 @@
 """Position sizing calculator for FX trading.
 
 This module calculates position sizes based on account balance, risk parameters,
-and various sizing methods (fixed, percent-risk, Kelly criterion).
+and various sizing methods (percent-risk, Kelly criterion).
 """
 
 import logging
@@ -15,7 +15,6 @@ from config.pairs import PAIR_INFO
 
 class PositionSizingMethod(Enum):
     """Position sizing methods."""
-    FIXED = "fixed"  # Fixed position size
     PERCENT_RISK = "percent_risk"  # Risk-based percentage
     KELLY = "kelly"  # Kelly criterion
 
@@ -53,25 +52,25 @@ class PositionSizer:
         stop_loss_pips: int,
         risk_percent: Optional[float] = None,
         method: PositionSizingMethod = PositionSizingMethod.PERCENT_RISK,
-        fixed_units: Optional[int] = None,
         kelly_win_rate: Optional[float] = None,
         kelly_avg_win: Optional[float] = None,
-        kelly_avg_loss: Optional[float] = None
+        kelly_avg_loss: Optional[float] = None,
+        current_price: Optional[float] = None
     ) -> Optional[PositionSizeResult]:
         """
         Calculate position size based on specified method.
-        
+
         Args:
             pair: Trading pair (e.g., 'EUR_USD')
             account_balance: Current account balance in USD
             stop_loss_pips: Stop loss distance in pips
             risk_percent: Risk percentage (default: from settings)
             method: Position sizing method
-            fixed_units: Fixed unit size (for FIXED method)
             kelly_win_rate: Win rate for Kelly criterion (0-1)
             kelly_avg_win: Average win amount
             kelly_avg_loss: Average loss amount
-        
+            current_price: Live market price (used for accurate pip value on USD_JPY, USD_CHF)
+
         Returns:
             PositionSizeResult or None if calculation fails
         """
@@ -103,108 +102,56 @@ class PositionSizer:
             risk_percent = self.max_risk_per_trade
         
         # Calculate based on method
-        if method == PositionSizingMethod.FIXED:
-            return self._calculate_fixed(
-                pair, account_balance, stop_loss_pips, fixed_units or 10000
-            )
-        
-        elif method == PositionSizingMethod.PERCENT_RISK:
+        if method == PositionSizingMethod.PERCENT_RISK:
             return self._calculate_percent_risk(
-                pair, account_balance, stop_loss_pips, risk_percent
+                pair, account_balance, stop_loss_pips, risk_percent, current_price
             )
-        
+
         elif method == PositionSizingMethod.KELLY:
             return self._calculate_kelly(
                 pair, account_balance, stop_loss_pips,
-                kelly_win_rate, kelly_avg_win, kelly_avg_loss
+                kelly_win_rate, kelly_avg_win, kelly_avg_loss, current_price
             )
         
         else:
             self.logger.error(f"Unknown position sizing method: {method}")
             return None
     
-    def _calculate_fixed(
-        self,
-        pair: str,
-        account_balance: float,
-        stop_loss_pips: int,
-        fixed_units: int
-    ) -> PositionSizeResult:
-        """
-        Calculate fixed position size.
-        
-        Args:
-            pair: Trading pair
-            account_balance: Account balance
-            stop_loss_pips: Stop loss in pips
-            fixed_units: Fixed number of units
-        
-        Returns:
-            PositionSizeResult
-        """
-        pair_info = PAIR_INFO[pair]
-        
-        # Calculate pip value for this position size
-        pip_value = self._get_pip_value(pair, fixed_units)
-        
-        # Calculate risk amount
-        risk_amount = stop_loss_pips * pip_value
-        risk_percent = risk_amount / account_balance
-        
-        # Calculate leverage used
-        # For USD quote currency pairs, notional = units * price (approx 1.0 for calculation)
-        notional_value = fixed_units * 1.0  # Simplified
-        leverage_used = notional_value / account_balance
-        
-        # Check if leverage exceeds maximum
-        notes = ""
-        if leverage_used > self.max_leverage:
-            notes = f"⚠️ Leverage {leverage_used:.1f}:1 exceeds max {self.max_leverage}:1"
-            self.logger.warning(notes)
-        
-        return PositionSizeResult(
-            units=fixed_units,
-            risk_amount=risk_amount,
-            risk_percent=risk_percent,
-            method=PositionSizingMethod.FIXED,
-            leverage_used=leverage_used,
-            pip_value=pip_value,
-            notes=notes
-        )
-    
     def _calculate_percent_risk(
         self,
         pair: str,
         account_balance: float,
         stop_loss_pips: int,
-        risk_percent: float
+        risk_percent: float,
+        current_price: Optional[float] = None
     ) -> PositionSizeResult:
         """
         Calculate position size based on risk percentage.
-        
+
         Args:
             pair: Trading pair
             account_balance: Account balance
             stop_loss_pips: Stop loss in pips
             risk_percent: Risk percentage (e.g., 0.02 for 2%)
-        
+            current_price: Live market price for accurate pip value conversion
+
         Returns:
             PositionSizeResult
         """
         # Calculate risk amount in dollars
         risk_amount = account_balance * risk_percent
-        
+
         # Calculate pip value per unit
-        pip_value_per_unit = self._get_pip_value(pair, 1)
-        
+        pip_value_per_unit = self._get_pip_value(pair, 1, current_price)
+
         # Calculate required position size
         # Risk = Stop Loss (pips) × Pip Value × Position Size
         # Position Size = Risk / (Stop Loss × Pip Value per unit)
         position_size = risk_amount / (stop_loss_pips * pip_value_per_unit)
-        
+
         # Round to integer units
         units = int(position_size)
-        
+
         # Ensure minimum trade size
         pair_info = PAIR_INFO[pair]
         if units < pair_info['min_trade_units']:
@@ -212,16 +159,16 @@ class PositionSizer:
             self.logger.warning(
                 f"Position size below minimum, using {units} units"
             )
-        
+
         # Recalculate actual risk with rounded units
-        pip_value = self._get_pip_value(pair, units)
+        pip_value = self._get_pip_value(pair, units, current_price)
         actual_risk_amount = stop_loss_pips * pip_value
         actual_risk_percent = actual_risk_amount / account_balance
-        
+
         # Calculate leverage
         notional_value = units * 1.0  # Simplified
         leverage_used = notional_value / account_balance
-        
+
         # Check constraints
         notes = ""
         if leverage_used > self.max_leverage:
@@ -229,13 +176,13 @@ class PositionSizer:
             max_units = int(account_balance * self.max_leverage)
             if max_units < units:
                 units = max_units
-                pip_value = self._get_pip_value(pair, units)
+                pip_value = self._get_pip_value(pair, units, current_price)
                 actual_risk_amount = stop_loss_pips * pip_value
                 actual_risk_percent = actual_risk_amount / account_balance
                 leverage_used = self.max_leverage
                 notes = f"⚠️ Position capped by max leverage {self.max_leverage}:1"
                 self.logger.warning(notes)
-        
+
         return PositionSizeResult(
             units=units,
             risk_amount=actual_risk_amount,
@@ -253,7 +200,8 @@ class PositionSizer:
         stop_loss_pips: int,
         win_rate: Optional[float],
         avg_win: Optional[float],
-        avg_loss: Optional[float]
+        avg_loss: Optional[float],
+        current_price: Optional[float] = None
     ) -> Optional[PositionSizeResult]:
         """
         Calculate position size using Kelly criterion.
@@ -312,7 +260,7 @@ class PositionSizer:
         
         # Use percent risk calculation with Kelly percentage
         result = self._calculate_percent_risk(
-            pair, account_balance, stop_loss_pips, adjusted_kelly
+            pair, account_balance, stop_loss_pips, adjusted_kelly, current_price
         )
         
         if result:
@@ -321,36 +269,33 @@ class PositionSizer:
         
         return result
     
-    def _get_pip_value(self, pair: str, position_size: int) -> float:
+    def _get_pip_value(self, pair: str, position_size: int, current_price: Optional[float] = None) -> float:
         """
         Calculate pip value in account currency (USD).
-        
+
         Args:
             pair: Trading pair
             position_size: Position size in units
-        
+            current_price: Live market price — required for accurate conversion on USD_JPY, USD_CHF
+
         Returns:
             Pip value in USD
         """
         pair_info = PAIR_INFO[pair]
-        
-        # For pairs quoted in USD (XXX_USD), pip value is straightforward
+
+        # For pairs quoted in USD (EUR_USD, GBP_USD, AUD_USD): pip value is in USD already
         if pair_info['quote_currency'] == 'USD':
             return pair_info['pip_value'] * position_size
-        
-        # For USD_XXX pairs, need to account for exchange rate
-        # Using approximate values for calculation
-        if pair == 'USD_JPY':
-            # 1 pip = 0.01 JPY
-            # At ~150 USD/JPY, need to convert JPY back to USD
-            return (pair_info['pip_value'] * position_size) / 150.0
-        
-        if pair == 'USD_CHF':
-            # 1 pip = 0.0001 CHF
-            # At ~0.9 USD/CHF
-            return (pair_info['pip_value'] * position_size) / 0.9
-        
-        # Default calculation
+
+        # For USD_XXX pairs, pip value is in the quote currency — divide by live rate to get USD
+        # pip_value_usd = pip_value_quote / current_price (quote units per 1 USD)
+        if current_price and current_price > 0:
+            return (pair_info['pip_value'] * position_size) / current_price
+
+        # current_price not available — log a warning and return raw pip value as best effort
+        self.logger.warning(
+            f"_get_pip_value: no current_price for {pair}, pip value may be inaccurate"
+        )
         return pair_info['pip_value'] * position_size
     
     def get_max_position_size(
@@ -464,29 +409,9 @@ def main():
         if result.notes:
             print(f"   Notes: {result.notes}")
     
-    # Test 2: Fixed Position Size
+    # Test 2: Kelly Criterion
     print("\n" + "-"*70)
-    print("TEST 2: Fixed Position Size (10,000 units)")
-    print("-"*70)
-    result = sizer.calculate(
-        pair=pair,
-        account_balance=account_balance,
-        stop_loss_pips=stop_loss_pips,
-        method=PositionSizingMethod.FIXED,
-        fixed_units=10000
-    )
-    
-    if result:
-        print(f"✅ Position Size: {result.units:,} units")
-        print(f"   Risk Amount: ${result.risk_amount:.2f}")
-        print(f"   Risk Percent: {result.risk_percent*100:.2f}%")
-        print(f"   Leverage: {result.leverage_used:.2f}:1")
-        if result.notes:
-            print(f"   Notes: {result.notes}")
-    
-    # Test 3: Kelly Criterion
-    print("\n" + "-"*70)
-    print("TEST 3: Kelly Criterion (50% win rate, 2:1 R:R)")
+    print("TEST 2: Kelly Criterion (50% win rate, 2:1 R:R)")
     print("-"*70)
     result = sizer.calculate(
         pair=pair,
@@ -506,9 +431,9 @@ def main():
         if result.notes:
             print(f"   Notes: {result.notes}")
     
-    # Test 4: Validation
+    # Test 3: Validation
     print("\n" + "-"*70)
-    print("TEST 4: Position Size Validation")
+    print("TEST 3: Position Size Validation")
     print("-"*70)
     
     test_units = 50000

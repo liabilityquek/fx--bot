@@ -325,6 +325,7 @@ class TradingEngine:
             account_balance=account.balance,
             stop_loss_pips=max(1, int(sl_pips)),
             method=PositionSizingMethod.PERCENT_RISK,
+            current_price=entry_price,
         )
         if not size_result:
             self.logger.warning(f"{pair}: position sizing failed")
