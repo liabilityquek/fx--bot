@@ -153,7 +153,7 @@ class TradingEngine:
                 sl_str = f"{t.stop_loss:.5f}" if t.stop_loss else "none"
                 tp_str = f"{t.take_profit:.5f}" if t.take_profit else "none"
                 lines.append(
-                    f"  {t.pair} {direction} {t.units:,} units"
+                    f"  {t.pair} {direction} {t.units / 100_000:.2f} lots"
                     f" | Entry: {t.entry_price:.5f}"
                     f" | P/L: {pnl_sign}${t.unrealized_pnl:.2f}"
                     f" | SL: {sl_str} | TP: {tp_str}"
@@ -519,7 +519,7 @@ class TradingEngine:
             f"Direction: {result.final_signal.value}",
             f"Entry: {entry_price:.5f}",
             f"SL: {stop_loss:.5f} | TP: {take_profit:.5f}",
-            f"Size: {units:,} units",
+            f"Size: {units / 100_000:.2f} lots",
             f"Confidence: {result.confidence:.2f}",
             "",
             f"LLM: {result.final_signal.value} ({result.confidence:.2f}) | "
