@@ -9,6 +9,7 @@ from typing import Dict, List, Optional, Tuple
 from dataclasses import dataclass
 
 from config.settings import settings
+from broker.base import Position
 
 
 @dataclass
@@ -57,7 +58,7 @@ class ExposureTracker:
     
     def update_positions(
         self,
-        positions: List[Dict],
+        positions: List[Position],
         account_balance: float
     ) -> ExposureReport:
         """
@@ -94,7 +95,7 @@ class ExposureTracker:
     
     def calculate_exposure(
         self,
-        open_positions: List[Dict],
+        open_positions: List[Position],
         account_balance: float,
         current_prices: Optional[Dict[str, float]] = None
     ) -> ExposureReport:
@@ -117,24 +118,23 @@ class ExposureTracker:
         
         # Process each position
         for position in open_positions:
-            pair = position.get('instrument', '').replace('-', '_')
-            units = float(position.get('long', {}).get('units', 0)) + \
-                    float(position.get('short', {}).get('units', 0))
-            
+            pair = position.pair.replace('-', '_')
+            units = float(position.net_units)
+
             # Determine direction
             is_long = units > 0
             abs_units = abs(units)
-            
+
             # Get currencies from pair
             if '_' in pair:
                 base_currency, quote_currency = pair.split('_')
             else:
                 self.logger.warning(f"Invalid pair format: {pair}")
                 continue
-            
+
             # Get current price for valuation
             current_price = current_prices.get(pair) if current_prices else \
-                           float(position.get('unrealizedPL', 0))
+                           float(position.unrealized_pnl)
             
             # Calculate USD value (simplified - assumes quote currency is USD for now)
             # TODO: Enhance with actual cross-rate calculations
