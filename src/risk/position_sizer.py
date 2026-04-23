@@ -166,14 +166,14 @@ class PositionSizer:
         actual_risk_percent = actual_risk_amount / account_balance
 
         # Calculate leverage
-        notional_value = units * 1.0  # Simplified
+        notional_value = units * (current_price or 1.0)
         leverage_used = notional_value / account_balance
 
         # Check constraints
         notes = ""
         if leverage_used > self.max_leverage:
             # Recalculate with max leverage constraint
-            max_units = int(account_balance * self.max_leverage)
+            max_units = int(account_balance * self.max_leverage / (current_price or 1.0))
             if max_units < units:
                 units = max_units
                 pip_value = self._get_pip_value(pair, units, current_price)
