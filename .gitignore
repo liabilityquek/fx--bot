@@ -61,7 +61,7 @@ htmlcov/
 
 # Temporary files
 *.tmp
-*.bak
+*.bak*
 *.json
 
 # Runtime state

@@ -318,12 +318,13 @@ class TradingEngine:
         sl_pips, stop_loss, take_profit = self._calc_sl_tp(
             pair, candles, entry_price, is_long
         )
+        sl_pips_int = max(1, int(sl_pips))
 
         # Position size
         size_result = self.position_sizer.calculate(
             pair=pair,
             account_balance=account.balance,
-            stop_loss_pips=max(1, int(sl_pips)),
+            stop_loss_pips=sl_pips_int,
             method=PositionSizingMethod.PERCENT_RISK,
             current_price=entry_price,
         )
@@ -339,7 +340,7 @@ class TradingEngine:
         validation = self.risk_validator.validate_trade(
             pair=pair,
             units=units,
-            stop_loss_pips=sl_pips,
+            stop_loss_pips=sl_pips_int,
             account_balance=account.balance,
             current_exposure_percent=margin_util_pct,
             open_positions=positions,
