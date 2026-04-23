@@ -339,7 +339,7 @@ class TradingEngine:
             stop_loss_pips=sl_pips,
             account_balance=account.balance,
             current_exposure_percent=exposure_report.total_exposure_percent,
-            open_positions=open_positions,
+            open_positions=positions,
             entry_price=entry_price,
             margin_available=account.margin_available,
         )
