@@ -128,7 +128,7 @@ class AlertManager:
             f"{direction_emoji} *Trade Opened*\n\n"
             f"*Pair:* `{pair}`\n"
             f"*Direction:* {side.upper()}\n"
-            f"*Size:* {units:,} units\n"
+            f"*Size:* {units / 100_000:.2f} lots ({units:,} units)\n"
             f"*Entry:* `{entry_price:.5f}`\n"
             f"*Stop Loss:* `{stop_loss:.5f}`\n"
             f"*Take Profit:* `{take_profit:.5f}`"
