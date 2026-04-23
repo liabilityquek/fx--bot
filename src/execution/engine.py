@@ -4,10 +4,11 @@ Every cycle:
   1. Kill switch check
   2. Weekend guard check
   3. Holiday guard check
-  4. Account info
+  4. Account info + daily loss circuit breaker
   5. For each pair: fetch candles + price → decision_engine.run_decision()
-     → risk checks → place order → Telegram alert with LLM + reviewer decision
-  6. Trade close detection (compare known open IDs vs current broker state)
+     → risk checks → place order → register with TradeManager → Telegram alert
+  6. TradeManager.update_all_trades() — trailing stop updates + age alerts
+  7. Trade close detection (compare known open IDs vs current broker state)
 """
 
 import logging
@@ -377,14 +378,25 @@ class TradingEngine:
                 f"{pair}: order filled | trade_id={trade_id} "
                 f"entry~{entry_price:.5f}"
             )
-            # Track trade for close detection
-            # Fetch from broker to get real fill price if available
+            # Track trade for close detection and TradeManager
+            # Fetch from broker to get real fill price and full Trade object
             filled_price = entry_price
+            placed_trade = None
             for t in self.broker.get_open_trades():
                 if t.trade_id == trade_id:
                     filled_price = t.entry_price
                     self._known_open_trades[trade_id] = t
+                    placed_trade = t
                     break
+
+            # Register with TradeManager so trailing stops activate immediately
+            if placed_trade:
+                self.trade_manager.register_trade(
+                    placed_trade,
+                    strategy_name=f"{result.final_signal.value.lower()}_signal",
+                    trailing_stop=True,
+                    trailing_distance=self.trade_manager.trailing_stop_distance_pips,
+                )
 
             self._send_vote_alert(
                 pair, result, filled_price, stop_loss, take_profit, units
@@ -532,16 +544,8 @@ class TradingEngine:
 
 
 # ---------------------------------------------------------------------------
-# Module-level helpers (also imported by main.py)
+# Module-level helpers
 # ---------------------------------------------------------------------------
-
-def _df_to_candle_list(candles: List[Dict]) -> List[Dict]:
-    """Pass-through: broker already returns List[Dict] with flat OHLCV keys.
-
-    Kept for backward compatibility with main.py import.
-    """
-    return candles
-
 
 def _calc_atr(candles: List[Dict], period: int = 14) -> Optional[float]:
     """Simple ATR from broker candle list (flat-key format)."""

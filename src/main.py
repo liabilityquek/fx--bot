@@ -23,7 +23,7 @@ from src.risk.kill_switch import KillSwitch
 from src.risk.weekend_guard import WeekendGuard
 from src.risk.holiday_guard import HolidayGuard
 from src.voting.engine import DecisionEngine
-from src.execution.engine import TradingEngine, _df_to_candle_list
+from src.execution.engine import TradingEngine
 from src.news import EventMonitor, EventImpact
 
 
@@ -75,7 +75,7 @@ def run_test(broker: OandaBroker, decision_engine: DecisionEngine, logger) -> bo
                 all_ok = False
                 continue
 
-            candles = _df_to_candle_list(candles_df)
+            candles = candles_df
 
             price_info = broker.get_current_price(pair)
             if not price_info:
