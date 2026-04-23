@@ -129,18 +129,10 @@ class RiskValidator:
         # Check 3: Total exposure
         check_name = "total_exposure"
         
-        # Estimate new position value
-        if pair_info and entry_price:
-            quote_currency = pair.split('_')[1] if '_' in pair else 'USD'
-            if quote_currency == 'USD':
-                new_position_value = abs(units) * entry_price
-            else:
-                new_position_value = abs(units) * 0.0001  # Rough estimate
-        else:
-            new_position_value = abs(units) * 0.0001
-        
+        # Estimate margin required for new position — same formula as Check 4
+        new_margin_required = (abs(units) * (entry_price or 1.0)) / self.max_leverage
         new_exposure_percent = current_exposure_percent + (
-            (new_position_value / account_balance) * 100 if account_balance > 0 else 0
+            (new_margin_required / account_balance) * 100 if account_balance > 0 else 0
         )
         
         max_exposure_percent = self.max_total_exposure * 100

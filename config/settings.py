@@ -87,7 +87,7 @@ class Settings:
 
     # Risk Management
     MAX_RISK_PER_TRADE: float = float(os.getenv('MAX_RISK_PER_TRADE', '0.02'))
-    MAX_TOTAL_EXPOSURE: float = float(os.getenv('MAX_TOTAL_EXPOSURE', '0.10'))
+    MAX_TOTAL_EXPOSURE: float = float(os.getenv('MAX_TOTAL_EXPOSURE', '0.80'))
     DEFAULT_STOP_LOSS_PIPS: int = int(os.getenv('DEFAULT_STOP_LOSS_PIPS', '50'))
     DEFAULT_TAKE_PROFIT_RATIO: float = float(os.getenv('DEFAULT_TAKE_PROFIT_RATIO', '2.0'))
 

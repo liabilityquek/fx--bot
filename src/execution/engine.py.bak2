@@ -335,13 +335,12 @@ class TradingEngine:
 
         # Risk validator
         exposure_report = self.exposure_tracker.get_current_exposure()
-        margin_util_pct = (account.margin_used / account.nav * 100) if account.nav > 0 else 0.0
         validation = self.risk_validator.validate_trade(
             pair=pair,
             units=units,
             stop_loss_pips=sl_pips,
             account_balance=account.balance,
-            current_exposure_percent=margin_util_pct,
+            current_exposure_percent=exposure_report.total_exposure_percent,
             open_positions=positions,
             entry_price=entry_price,
             margin_available=account.margin_available,
@@ -443,13 +442,12 @@ class TradingEngine:
         are never left unprotected by the bot's risk layer.
         """
         exposure_report = self.exposure_tracker.get_current_exposure()
-        margin_util_pct = (account.margin_used / account.nav * 100) if account.nav > 0 else 0.0
 
         status = self.emergency_controller.check_emergency_conditions(
             account_balance=account.balance,
             initial_balance=self._initial_balance or account.balance,
             open_positions=positions,
-            current_exposure_percent=margin_util_pct,
+            current_exposure_percent=exposure_report.total_exposure_percent,
             unrealized_pnl=account.unrealized_pnl,
         )
 
