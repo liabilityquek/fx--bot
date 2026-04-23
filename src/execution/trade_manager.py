@@ -89,8 +89,8 @@ class TradeManager:
         
         # Configuration
         self.trailing_stop_enabled = True
-        self.trailing_stop_activation_pips = 20.0  # Activate after X pips profit
-        self.trailing_stop_distance_pips = 15.0    # Trail by X pips
+        self.trailing_stop_activation_pips = 7.0   # Activate after X pips profit
+        self.trailing_stop_distance_pips = 3.0     # Trail by X pips
         self.max_trade_age_hours = 72.0            # Alert if trade older than this
         self.partial_close_levels = [0.5, 0.75]    # Close 50% at 50% of TP, etc.
     
