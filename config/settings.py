@@ -109,9 +109,14 @@ class Settings:
     # ECONOMIC CALENDAR
     # ==========================================
     JB_NEWS_API_KEY: str = os.getenv('JB_NEWS_API_KEY', '')
+    # Rule 1 & 2 — suspension window
     NEWS_SUSPEND_BEFORE_MINUTES: int = int(os.getenv('NEWS_SUSPEND_BEFORE_MINUTES', '30'))
     NEWS_RESUME_AFTER_MINUTES: int = int(os.getenv('NEWS_RESUME_AFTER_MINUTES', '15'))
     EVENT_CACHE_TTL_HOURS: int = int(os.getenv('EVENT_CACHE_TTL_HOURS', '1'))
+    # Rule 3 — news risk agent (pre-event LLM close decision)
+    NEWS_RISK_CLOSE_THRESHOLD: float = float(os.getenv('NEWS_RISK_CLOSE_THRESHOLD', '0.65'))
+    NEWS_RISK_MINUTES_BEFORE: int = int(os.getenv('NEWS_RISK_MINUTES_BEFORE', '15'))
+    NEWS_RISK_POLL_INTERVAL_SECONDS: int = int(os.getenv('NEWS_RISK_POLL_INTERVAL_SECONDS', '120'))
     HIGH_IMPACT_EVENTS: List[str] = os.getenv(
         'HIGH_IMPACT_EVENTS',
         'NFP,FOMC,GDP,CPI,Interest Rate,Central Bank'

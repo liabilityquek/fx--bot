@@ -17,6 +17,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from src.broker.base import AccountInfo, OrderSide, Trade
 from src.execution.engine import TradingEngine
 from src.risk.emergency_controller import EmergencyStatus, EmergencyLevel, ShutdownReason
+from src.news.suspension_manager import SuspensionStatus, SuspensionReason
 
 
 # ---------------------------------------------------------------------------
@@ -258,6 +259,68 @@ class TestWeekendGuard(unittest.TestCase):
         engine.emergency_controller.check_emergency_conditions.assert_not_called()
         engine.trade_manager.update_all_trades.assert_not_called()
         engine._process_pair.assert_not_called()
+
+
+# ---------------------------------------------------------------------------
+# News suspension — Rule 1
+# ---------------------------------------------------------------------------
+
+def _make_engine_with_suspension(is_suspended: bool):
+    """Build TradingEngine with real _process_pair but mocked suspension_manager."""
+    broker = MagicMock()
+    broker.get_account_info.return_value = _make_account()
+    broker.get_positions.return_value = []
+    broker.get_open_trades.return_value = []
+    broker.get_historical_candles.return_value = []
+    broker.get_current_price.return_value = None
+
+    decision_engine = MagicMock()
+    alert_manager = MagicMock()
+
+    engine = TradingEngine(
+        broker=broker,
+        decision_engine=decision_engine,
+        alert_manager=alert_manager,
+        dry_run=True,
+    )
+
+    engine.emergency_controller = MagicMock()
+    engine.trade_manager = MagicMock()
+    engine.exposure_tracker = MagicMock()
+    engine.exposure_tracker.get_current_exposure.return_value = MagicMock(
+        total_exposure_percent=5.0
+    )
+
+    status = SuspensionStatus(
+        is_suspended=is_suspended,
+        reason=SuspensionReason.HIGH_IMPACT_NEWS if is_suspended else None,
+        suspended_pairs={"EUR_USD"} if is_suspended else set(),
+        triggering_event=None,
+        resume_time=None,
+        message="Suspended: NFP" if is_suspended else "Trading allowed",
+    )
+    engine.suspension_manager = MagicMock()
+    engine.suspension_manager.check_suspension_status.return_value = status
+
+    return engine
+
+
+class TestNewsEventSuspension(unittest.TestCase):
+
+    def test_suspended_pair_skips_candle_fetch(self):
+        engine = _make_engine_with_suspension(is_suspended=True)
+        engine._process_pair("EUR_USD", _make_account(), [])
+        engine.broker.get_historical_candles.assert_not_called()
+
+    def test_suspended_pair_skips_decision_engine(self):
+        engine = _make_engine_with_suspension(is_suspended=True)
+        engine._process_pair("EUR_USD", _make_account(), [])
+        engine.decision_engine.run_decision.assert_not_called()
+
+    def test_unsuspended_pair_proceeds_to_candle_fetch(self):
+        engine = _make_engine_with_suspension(is_suspended=False)
+        engine._process_pair("EUR_USD", _make_account(), [])
+        engine.broker.get_historical_candles.assert_called_once()
 
 
 if __name__ == "__main__":

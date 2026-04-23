@@ -25,6 +25,8 @@ from src.risk.holiday_guard import HolidayGuard
 from src.voting.engine import DecisionEngine
 from src.execution.engine import TradingEngine
 from src.news import EventMonitor, EventImpact
+from src.agents.news_risk_agent import NewsRiskAgent
+from src.news.news_watcher import NewsWatcher
 
 
 def parse_args():
@@ -131,6 +133,7 @@ def main():
         logger.error("Cannot connect to broker — aborting")
         sys.exit(1)
 
+    news_risk_agent = NewsRiskAgent(logger)
     engine = TradingEngine(
         broker=broker,
         decision_engine=decision_engine,
@@ -140,7 +143,18 @@ def main():
         holiday_guard=holiday_guard,
         logger=logger,
         dry_run=args.dry_run,
+        event_monitor=event_monitor,
     )
+    news_watcher = NewsWatcher(
+        event_monitor=event_monitor,
+        broker=broker,
+        alert_manager=alert_manager,
+        news_risk_agent=news_risk_agent,
+        get_trades_snapshot_fn=engine.get_known_trades_snapshot,
+        on_trade_closed_fn=engine.remove_known_trade,
+        logger=logger,
+    )
+    engine.news_watcher = news_watcher
 
     # Start Telegram command poller
     def _get_calendar_text() -> str:

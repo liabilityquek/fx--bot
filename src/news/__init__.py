@@ -10,6 +10,7 @@ from .suspension_manager import (
     SuspensionStatus,
     SuspensionReason
 )
+from .news_watcher import NewsWatcher
 
 __all__ = [
     'EventMonitor',
@@ -18,4 +19,5 @@ __all__ = [
     'SuspensionManager',
     'SuspensionStatus',
     'SuspensionReason',
+    'NewsWatcher',
 ]

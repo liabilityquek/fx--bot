@@ -32,15 +32,17 @@ class SuspensionStatus:
 class SuspensionManager:
     """Manage trading suspensions based on economic events."""
     
-    def __init__(self, logger: Optional[logging.Logger] = None, on_suspension_lifted=None):
+    def __init__(self, event_monitor: EventMonitor,
+                 logger: Optional[logging.Logger] = None, on_suspension_lifted=None):
         """
         Initialize suspension manager.
-        
+
         Args:
+            event_monitor: Shared EventMonitor instance (injected — not created here)
             logger: Logger instance
         """
         self.logger = logger or logging.getLogger('suspension_manager')
-        self.event_monitor = EventMonitor(logger=logger)
+        self.event_monitor = event_monitor
         
         # Settings
         self.suspend_before_minutes = settings.NEWS_SUSPEND_BEFORE_MINUTES

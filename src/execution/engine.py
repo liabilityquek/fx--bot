@@ -33,6 +33,7 @@ from src.risk.emergency_controller import EmergencyRiskController, ShutdownReaso
 from src.execution.trade_manager import TradeManager
 from src.voting.engine import DecisionResult, DecisionEngine
 from src.agents.base import Signal
+from src.news.suspension_manager import SuspensionManager
 
 
 class TradingEngine:
@@ -48,6 +49,8 @@ class TradingEngine:
         holiday_guard=None,
         logger: Optional[logging.Logger] = None,
         dry_run: bool = False,
+        event_monitor=None,
+        news_watcher=None,
     ):
         self.broker = broker
         self.decision_engine = decision_engine
@@ -69,9 +72,19 @@ class TradingEngine:
             alert_manager=self.alert_manager,
         )
 
+        # News suspension (Rule 1 & 2) — only active when event_monitor provided
+        self.suspension_manager = (
+            SuspensionManager(event_monitor=event_monitor, logger=self.logger)
+            if event_monitor else None
+        )
+
+        # News risk watcher (Rule 3) — set after construction via main.py
+        self.news_watcher = news_watcher
+
         # State
         self._stop_event = threading.Event()
         self._cycle_count = 0
+        self._trades_lock = threading.Lock()
         self._known_open_trades: Dict[str, Trade] = {}   # trade_id → Trade
         self._initial_balance: Optional[float] = None
 
@@ -99,10 +112,14 @@ class TradingEngine:
 
         # Seed known open trades from broker state
         try:
-            for t in self.broker.get_open_trades():
-                self._known_open_trades[t.trade_id] = t
+            with self._trades_lock:
+                for t in self.broker.get_open_trades():
+                    self._known_open_trades[t.trade_id] = t
         except Exception as exc:
             self.logger.warning(f"Failed to seed open trades on startup: {exc}")
+
+        if self.news_watcher:
+            self.news_watcher.start()
 
         while not self._stop_event.is_set():
             self._run_cycle()
@@ -118,6 +135,8 @@ class TradingEngine:
 
     def stop(self) -> None:
         self._stop_event.set()
+        if self.news_watcher:
+            self.news_watcher.stop()
 
     def get_status(self) -> str:
         lines = [
@@ -160,6 +179,16 @@ class TradingEngine:
                 )
 
         return "\n".join(lines)
+
+    def get_known_trades_snapshot(self) -> Dict[str, Trade]:
+        """Return a thread-safe copy of currently tracked open trades."""
+        with self._trades_lock:
+            return dict(self._known_open_trades)
+
+    def remove_known_trade(self, trade_id: str) -> None:
+        """Remove a trade from the known-open set (called by NewsWatcher on close)."""
+        with self._trades_lock:
+            self._known_open_trades.pop(trade_id, None)
 
     # ------------------------------------------------------------------
     # Cycle
@@ -269,6 +298,19 @@ class TradingEngine:
 
     def _process_pair(self, pair: str, account, positions) -> None:
         self.logger.info(f"--- {pair} ---")
+
+        # Rule 1 & 2 — news suspension check
+        if self.suspension_manager:
+            status = self.suspension_manager.check_suspension_status(pair=pair)
+            if status.is_suspended:
+                resume_str = (
+                    status.resume_time.strftime('%H:%M')
+                    if status.resume_time else 'TBD'
+                )
+                self.logger.info(
+                    f"{pair}: suspended — {status.message} (resumes ~{resume_str})"
+                )
+                return
 
         # Fetch candles — broker returns List[Dict] with flat keys
         candles: List[Dict] = []
@@ -388,7 +430,8 @@ class TradingEngine:
             for t in self.broker.get_open_trades():
                 if t.trade_id == trade_id:
                     filled_price = t.entry_price
-                    self._known_open_trades[trade_id] = t
+                    with self._trades_lock:
+                        self._known_open_trades[trade_id] = t
                     placed_trade = t
                     break
 
@@ -410,13 +453,15 @@ class TradingEngine:
     # ------------------------------------------------------------------
 
     def _check_closed_trades(self) -> None:
-        if not self._known_open_trades:
-            return
+        with self._trades_lock:
+            if not self._known_open_trades:
+                return
+            snapshot = dict(self._known_open_trades)
 
         current_trades = self.broker.get_open_trades()
         current_ids = {t.trade_id for t in current_trades}
 
-        for trade_id, trade in list(self._known_open_trades.items()):
+        for trade_id, trade in snapshot.items():
             if trade_id not in current_ids:
                 self.logger.info(
                     f"Trade closed detected: {trade_id} ({trade.pair})"
@@ -426,12 +471,14 @@ class TradingEngine:
                     pnl=0.0,
                     reason="Closed (SL/TP/manual)",
                 )
-                del self._known_open_trades[trade_id]
+                with self._trades_lock:
+                    self._known_open_trades.pop(trade_id, None)
 
         # Add any new trades we don't know about yet
-        for t in current_trades:
-            if t.trade_id not in self._known_open_trades:
-                self._known_open_trades[t.trade_id] = t
+        with self._trades_lock:
+            for t in current_trades:
+                if t.trade_id not in self._known_open_trades:
+                    self._known_open_trades[t.trade_id] = t
 
     # ------------------------------------------------------------------
     # Emergency risk check
