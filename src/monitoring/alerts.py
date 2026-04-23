@@ -422,14 +422,14 @@ class AlertManager:
         extra = fn() if fn else ""
 
         msg = (
-            f"📊 *Bot Status*\n\n"
-            f"*Trading:* {ks_status}\n"
-            f"*Mode:* {'PAPER' if settings.PAPER_TRADING_MODE else '⚠️ LIVE'}\n"
+            f"📊 Bot Status\n\n"
+            f"Trading: {ks_status}\n"
+            f"Mode: {'PAPER' if settings.PAPER_TRADING_MODE else 'LIVE'}\n"
         )
         if extra:
             msg += f"\n{extra}"
 
-        self._send_telegram(msg)
+        self._send_telegram(msg, parse_mode="")
 
     def _handle_calendar(self) -> None:
         """Reply with today's upcoming economic calendar events."""
