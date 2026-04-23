@@ -24,21 +24,10 @@ from typing import Dict, List, Optional
 from openai import OpenAI
 
 from .base import AgentVote, Signal
+from ._llm_utils import _is_credit_exhausted
 
 _MIN_CALL_SPACING_SECONDS = 5
 _last_reviewer_call: float = 0.0
-
-_CREDIT_EXHAUSTION_KEYWORDS = (
-    'quota', 'credit', 'billing', 'insufficient',
-    'payment', 'exceeded your', 'out of tokens', 'balance',
-)
-
-
-def _is_credit_exhausted(exc: Exception) -> bool:
-    msg = str(exc).lower()
-    if hasattr(exc, 'status_code') and getattr(exc, 'status_code', None) == 402:
-        return True
-    return any(kw in msg for kw in _CREDIT_EXHAUSTION_KEYWORDS)
 
 
 class ReviewVerdict(Enum):

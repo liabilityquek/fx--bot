@@ -100,8 +100,8 @@ class TradingEngine:
         try:
             for t in self.broker.get_open_trades():
                 self._known_open_trades[t.trade_id] = t
-        except Exception:
-            pass
+        except Exception as exc:
+            self.logger.warning(f"Failed to seed open trades on startup: {exc}")
 
         while not self._stop_event.is_set():
             self._run_cycle()
@@ -302,7 +302,6 @@ class TradingEngine:
 
         # Conflict check — skip if existing position in opposite direction
         is_long = result.final_signal == Signal.BUY
-        open_positions = [{'pair': p.pair, 'units': p.net_units} for p in positions]
 
         for pos in positions:
             if pos.pair == pair and not pos.is_flat:

@@ -9,7 +9,7 @@ from typing import Dict, List, Optional, Tuple
 from dataclasses import dataclass
 
 from config.settings import settings
-from broker.base import Position
+from src.broker.base import Position
 
 
 @dataclass
@@ -133,8 +133,7 @@ class ExposureTracker:
                 continue
 
             # Get current price for valuation
-            current_price = current_prices.get(pair) if current_prices else \
-                           float(position.unrealized_pnl)
+            current_price = current_prices.get(pair) if current_prices else None
             
             # Calculate USD value (simplified - assumes quote currency is USD for now)
             # TODO: Enhance with actual cross-rate calculations

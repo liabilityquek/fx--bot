@@ -260,6 +260,7 @@ class TradeManager:
         if should_update:
             success = self.broker.modify_trade(
                 trade_id=trade.trade_id,
+                pair=trade.pair,
                 stop_loss=new_sl
             )
             
@@ -417,19 +418,21 @@ class TradeManager:
     def modify_stop_loss(
         self,
         trade_id: str,
+        pair: str,
         new_sl: float
     ) -> TradeManagementResult:
         """
         Modify stop loss for a trade.
-        
+
         Args:
             trade_id: Trade ID
+            pair: Instrument pair (e.g. 'USD_CHF') for price formatting
             new_sl: New stop loss price
-        
+
         Returns:
             TradeManagementResult
         """
-        success = self.broker.modify_trade(trade_id, stop_loss=new_sl)
+        success = self.broker.modify_trade(trade_id, pair=pair, stop_loss=new_sl)
         
         if success:
             self.logger.info(f"Modified SL for {trade_id}: {new_sl}")
@@ -451,19 +454,21 @@ class TradeManager:
     def modify_take_profit(
         self,
         trade_id: str,
+        pair: str,
         new_tp: float
     ) -> TradeManagementResult:
         """
         Modify take profit for a trade.
-        
+
         Args:
             trade_id: Trade ID
+            pair: Instrument pair (e.g. 'USD_CHF') for price formatting
             new_tp: New take profit price
-        
+
         Returns:
             TradeManagementResult
         """
-        success = self.broker.modify_trade(trade_id, take_profit=new_tp)
+        success = self.broker.modify_trade(trade_id, pair=pair, take_profit=new_tp)
         
         if success:
             self.logger.info(f"Modified TP for {trade_id}: {new_tp}")
@@ -481,46 +486,6 @@ class TradeManager:
                 success=False,
                 details="Broker rejected modification"
             )
-    
-    def get_trade_summary(self) -> Dict:
-        """
-        Get summary of all managed trades.
-        
-        Returns:
-            Summary dictionary
-        """
-        total_pnl = 0.0
-        long_count = 0
-        short_count = 0
-        by_pair = {}
-        
-        for managed in self.managed_trades.values():
-            trade = managed.trade
-            total_pnl += trade.unrealized_pnl
-            
-            if trade.is_long:
-                long_count += 1
-            else:
-                short_count += 1
-            
-            if trade.pair not in by_pair:
-                by_pair[trade.pair] = {
-                    'count': 0,
-                    'units': 0,
-                    'pnl': 0.0
-                }
-            
-            by_pair[trade.pair]['count'] += 1
-            by_pair[trade.pair]['units'] += trade.units
-            by_pair[trade.pair]['pnl'] += trade.unrealized_pnl
-        
-        return {
-            'total_trades': len(self.managed_trades),
-            'long_count': long_count,
-            'short_count': short_count,
-            'total_unrealized_pnl': total_pnl,
-            'by_pair': by_pair
-        }
     
     def get_managed_trade(self, trade_id: str) -> Optional[ManagedTrade]:
         """Get a managed trade by ID."""

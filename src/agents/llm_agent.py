@@ -25,6 +25,7 @@ from openai import OpenAI
 
 from .base import AgentVote, Signal
 from .indicators import to_dataframe
+from ._llm_utils import _is_credit_exhausted
 
 # Minimum seconds between successive LLM calls (rate-limit guard)
 _MIN_CALL_SPACING_SECONDS = 10
@@ -35,27 +36,6 @@ _SYSTEM_PROMPT = (
     '{"vote": "BUY|SELL|HOLD", "confidence": 0.0-1.0, "reasoning": "max 120 chars"}\n'
     "Only vote BUY or SELL if confidence > 0.55, otherwise HOLD."
 )
-
-# Keywords that indicate permanent credit/quota exhaustion (not a transient spike)
-_CREDIT_EXHAUSTION_KEYWORDS = (
-    'quota',
-    'credit',
-    'billing',
-    'insufficient',
-    'payment',
-    'exceeded your',
-    'out of tokens',
-    'balance',
-)
-
-
-def _is_credit_exhausted(exc: Exception) -> bool:
-    """Return True if the exception signals permanent credit/quota exhaustion."""
-    msg = str(exc).lower()
-    # Also catch HTTP 402 Payment Required surfaced by either SDK
-    if hasattr(exc, 'status_code') and getattr(exc, 'status_code', None) == 402:
-        return True
-    return any(kw in msg for kw in _CREDIT_EXHAUSTION_KEYWORDS)
 
 
 class LLMAgent:

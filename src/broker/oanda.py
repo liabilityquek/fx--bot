@@ -15,10 +15,17 @@ import oandapyV20.endpoints.orders as orders
 import oandapyV20.endpoints.instruments as instruments
 
 from config.settings import settings
+from config.pairs import PAIR_INFO
 from .base import (
     BaseBroker, Trade, Position, AccountInfo,
     OrderSide, OrderStatus
 )
+
+
+def _fmt_price(pair: str, price: float) -> str:
+    """Format a price to OANDA's required decimal precision for the pair."""
+    decimals = PAIR_INFO.get(pair, {}).get('pip_decimal', 4) + 1
+    return f"{price:.{decimals}f}"
 
 
 class OandaBroker(BaseBroker):
@@ -264,13 +271,13 @@ class OandaBroker(BaseBroker):
             # Add stop loss if provided
             if stop_loss:
                 order_spec["order"]["stopLossOnFill"] = {
-                    "price": str(stop_loss)
+                    "price": _fmt_price(pair, stop_loss)
                 }
-            
+
             # Add take profit if provided
             if take_profit:
                 order_spec["order"]["takeProfitOnFill"] = {
-                    "price": str(take_profit)
+                    "price": _fmt_price(pair, take_profit)
                 }
             
             # Place the order
@@ -364,6 +371,7 @@ class OandaBroker(BaseBroker):
     def modify_trade(
         self,
         trade_id: str,
+        pair: str,
         stop_loss: Optional[float] = None,
         take_profit: Optional[float] = None
     ) -> bool:
@@ -375,12 +383,12 @@ class OandaBroker(BaseBroker):
                 tradeID=trade_id
             )
             trade_data = self.api.request(endpoint_details)
-            
+
             # Modify stop loss
             if stop_loss is not None:
                 sl_spec = {
                     "stopLoss": {
-                        "price": str(stop_loss),
+                        "price": _fmt_price(pair, stop_loss),
                         "timeInForce": "GTC"
                     }
                 }
@@ -390,12 +398,12 @@ class OandaBroker(BaseBroker):
                     data=sl_spec
                 )
                 self.api.request(endpoint_sl)
-            
+
             # Modify take profit
             if take_profit is not None:
                 tp_spec = {
                     "takeProfit": {
-                        "price": str(take_profit),
+                        "price": _fmt_price(pair, take_profit),
                         "timeInForce": "GTC"
                     }
                 }

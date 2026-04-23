@@ -12,17 +12,17 @@ import logging
 from typing import Dict, List, Optional, Tuple
 from dataclasses import dataclass
 from datetime import datetime, timedelta
-from enum import Enum
+from enum import Enum, IntEnum
 
 from config.settings import settings
 
 
-class EmergencyLevel(Enum):
+class EmergencyLevel(IntEnum):
     """Emergency severity levels."""
-    NONE = "none"
-    WARNING = "warning"  # Approaching limits
-    CRITICAL = "critical"  # Limits breached
-    PANIC = "panic"  # Immediate shutdown required
+    NONE = 0
+    WARNING = 1     # Approaching limits
+    CRITICAL = 2    # Limits breached
+    PANIC = 3       # Immediate shutdown required
 
 
 class ShutdownReason(Enum):
@@ -276,18 +276,18 @@ class EmergencyRiskController:
         
         try:
             # Step 1: Get all open positions
-            open_positions = broker_client.get_open_positions()
+            open_positions = broker_client.get_positions()
             self.logger.info(f"Found {len(open_positions)} open positions to close")
             
             # Step 2: Close all positions
             for position in open_positions:
                 try:
-                    instrument = position.get('instrument', '').replace('-', '_')
-                    
+                    instrument = position.pair
+
                     # Get unrealized P/L
-                    unrealized_pl = float(position.get('unrealizedPL', 0))
+                    unrealized_pl = position.unrealized_pnl
                     total_loss += unrealized_pl
-                    
+
                     # Close position
                     result = broker_client.close_position(instrument)
                     positions_closed += 1
@@ -384,38 +384,38 @@ class EmergencyRiskController:
         
         for position in open_positions:
             try:
-                instrument = position.get('instrument', '').replace('-', '_')
-                unrealized_pl = float(position.get('unrealizedPL', 0))
-                
+                instrument = position.pair
+                unrealized_pl = position.unrealized_pnl
+
                 # Skip winning positions if only_losing=True
                 if only_losing and unrealized_pl >= 0:
                     continue
-                
+
                 # Get current price
                 current_price = broker_client.get_current_price(instrument)
-                
-                # Determine position direction
-                long_units = float(position.get('long', {}).get('units', 0))
-                short_units = float(position.get('short', {}).get('units', 0))
-                
-                if long_units > 0:
+
+                # Look up pip value for this specific pair
+                from config.pairs import PAIR_INFO
+                pair_info = PAIR_INFO.get(instrument, {})
+                pip_value = pair_info.get('pip_value', 0.0001)
+
+                if position.is_long:
                     # Long position - stop below current price
-                    pip_value = 0.0001  # Simplified
                     new_stop = current_price['bid'] - (new_stop_pips * pip_value)
-                elif short_units < 0:
+                elif position.is_short:
                     # Short position - stop above current price
-                    pip_value = 0.0001
                     new_stop = current_price['ask'] + (new_stop_pips * pip_value)
                 else:
                     continue
-                
-                # Modify trade (implementation depends on broker API)
-                # This is a simplified version
-                result = broker_client.modify_trade(
-                    instrument=instrument,
-                    stop_loss=new_stop
-                )
-                
+
+                # Modify each trade within the position
+                for trade in position.trades:
+                    result = broker_client.modify_trade(
+                        trade_id=trade.trade_id,
+                        pair=instrument,
+                        stop_loss=new_stop
+                    )
+
                 modified += 1
                 self.logger.info(
                     f"Tightened stop loss for {instrument}: "
@@ -456,22 +456,22 @@ class EmergencyRiskController:
         # Sort by unrealized P/L (worst first)
         sorted_positions = sorted(
             open_positions,
-            key=lambda p: float(p.get('unrealizedPL', 0))
+            key=lambda p: p.unrealized_pnl
         )
-        
+
         positions_to_close = sorted_positions[:count]
-        
+
         self.logger.warning(
             f"Closing {len(positions_to_close)} worst positions"
         )
-        
+
         closed = 0
         total_loss = 0.0
-        
+
         for position in positions_to_close:
             try:
-                instrument = position.get('instrument', '').replace('-', '_')
-                unrealized_pl = float(position.get('unrealizedPL', 0))
+                instrument = position.pair
+                unrealized_pl = position.unrealized_pnl
                 
                 broker_client.close_position(instrument)
                 
@@ -516,7 +516,7 @@ class EmergencyRiskController:
         """Get human-readable emergency status summary."""
         lines = [
             f"\n🚨 Emergency Risk Status",
-            f"  Level: {status.level.value.upper()}",
+            f"  Level: {status.level.name}",
             f"  Positions at Risk: {status.positions_at_risk}",
             f"  Shutdown Required: {'YES ⚠️' if status.requires_shutdown else 'No'}",
         ]

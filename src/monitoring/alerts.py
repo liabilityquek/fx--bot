@@ -277,6 +277,7 @@ class AlertManager:
         self._get_analyst_fn = get_analyst_fn
         self._get_reviewer_fn = get_reviewer_fn
         self._poll_interval = poll_interval_seconds
+        self._poll_failures = 0  # consecutive failure counter
         self._last_update_id: int = self._fetch_latest_update_id()
 
         thread = threading.Thread(
@@ -314,7 +315,12 @@ class AlertManager:
             try:
                 self._check_commands()
             except Exception as exc:
-                self.logger.warning(f"Telegram poll error: {exc}")
+                self._poll_failures += 1
+                if self._poll_failures >= 3:
+                    safe = str(exc)
+                    if self.bot_token:
+                        safe = safe.replace(self.bot_token, "[REDACTED]")
+                    self.logger.warning(f"Telegram poll error (x{self._poll_failures}): {safe}")
             time.sleep(self._poll_interval)
 
     def _check_commands(self) -> None:
@@ -330,14 +336,19 @@ class AlertManager:
         }
 
         try:
-            resp = requests.get(url, params=params, timeout=8)
+            resp = requests.get(url, params=params, timeout=12)
             resp.raise_for_status()
             data = resp.json()
+            self._poll_failures = 0  # reset on success
         except requests.RequestException as exc:
+            self._poll_failures += 1
             safe = str(exc)
             if self.bot_token:
                 safe = safe.replace(self.bot_token, "[REDACTED]")
-            self.logger.warning(f"getUpdates failed: {safe}")
+            if self._poll_failures >= 3:
+                self.logger.warning(f"getUpdates failed (x{self._poll_failures}): {safe}")
+            else:
+                self.logger.debug(f"getUpdates transient error: {safe}")
             return
 
         for update in data.get("result", []):

@@ -207,6 +207,7 @@ class BaseBroker(ABC):
     def modify_trade(
         self,
         trade_id: str,
+        pair: str,
         stop_loss: Optional[float] = None,
         take_profit: Optional[float] = None
     ) -> bool:
