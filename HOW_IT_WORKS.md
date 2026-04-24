@@ -231,26 +231,31 @@ While a trade is open, the bot keeps watching it every hour.
 
 **Trailing protection (locking in profits):**
 
-Once a trade is 20 price units in profit, the bot automatically moves the safety exit to follow the price — always staying 15 units behind. This way, if the price suddenly reverses, you still walk away with a profit instead of nothing.
+Once a trade is 7 pips in profit, the bot automatically moves the safety exit to follow the price — always staying 3 pips behind. This way, if the price suddenly reverses, you still walk away with a profit instead of nothing.
+
+Both values are configurable via `.env`: `TRAILING_STOP_ACTIVATION_PIPS` (default 7) and `TRAILING_STOP_DISTANCE_PIPS` (default 3).
+
+The trailing stop state is saved to disk — if the bot restarts, it picks up exactly where it left off on all open trades.
 
 ```
-Price moves in your favour:
+Price moves in your favour (SELL trade, price falling):
 
   Trade opened at ──────────────────► 1.0948  (entry)
-  Safety exit starts at ────────────► 1.1000  (50 units away)
+  Safety exit starts at ────────────► 1.1000  (50 pips away)
 
-  Price drops to 1.0928 (20 units profit):
-  Safety exit moves to ─────────────► 1.0943  (15 units behind peak)
+  Price drops to 1.0941 (7 pips profit):
+  Trailing stop activates.
+  Safety exit moves to ─────────────► 1.0944  (3 pips behind peak)
 
-  Price keeps dropping to 1.0910 (38 units profit):
-  Safety exit moves to ─────────────► 1.0925  (15 units behind peak)
+  Price keeps dropping to 1.0920 (28 pips profit):
+  Safety exit moves to ─────────────► 1.0923  (3 pips behind peak)
 
-  Price reverses and hits 1.0925:
+  Price reverses and hits 1.0923:
   Trade closes automatically. Profit locked in.
 ```
 
 **Warning alerts the bot sends you:**
-- Trade has been open for more than 24 hours
+- Trade has been open for more than 72 market hours (weekends excluded)
 - Price is getting very close to the safety exit or profit exit
 - Unrealised loss on a trade is getting unusually large
 - Total risk across all open trades is getting too high
@@ -450,8 +455,8 @@ The bot connects to several external services:
 | 1:08 PM | Bot calculates: 2% of $10k = $200 max loss. Safety exit at 50 units. Size = 40,000 units. |
 | 1:09 PM | Trade placed: SELL 40,000 units at 1.0948. Safety exit at 1.1000. Profit exit at 1.0925. |
 | 1:10 PM | Telegram message sent: "New trade opened — SELL Euro/Dollar." |
-| 2:00 PM | Next cycle. Trade is 13 units in profit. Trailing protection not yet active (needs 20 units). |
-| 3:00 PM | Price is now 25 units in profit. Trailing protection activates. Safety exit moves to 1.0933. |
+| 2:00 PM | Next cycle. Trade is 13 pips in profit. Trailing protection not yet active (needs 7 pips). |
+| 3:00 PM | Price is now 25 pips in profit. Trailing protection is active. Safety exit now trails 3 pips behind peak at 1.0923. |
 | 3:30 PM | Price reaches 1.0925 — the profit exit. Trade closes automatically. |
 | 3:31 PM | Telegram: "Trade closed at target. Profit: +$276. Account: $10,276." |
 

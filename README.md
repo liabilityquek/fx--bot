@@ -59,7 +59,8 @@ fx-trading-bot/
 │   ├── utils/             # Helpers
 │   └── voting/            # DecisionEngine (analyst → reviewer pipeline)
 ├── data/
-│   └── cache/             # Market data cache (gitignored)
+│   ├── cache/             # Market data cache (gitignored)
+│   └── managed_trades.json  # Trailing stop state — persisted across restarts
 ├── logs/                  # Trade logs (gitignored)
 ├── Dockerfile
 ├── requirements.txt
@@ -76,7 +77,8 @@ Trades are closed under the following conditions:
 |---------|--------|
 | **Stop Loss** | Broker-side order. Calculated via fixed pips, ATR (2× multiplier), or percentage of entry |
 | **Take Profit** | Broker-side order. Set at `SL distance × risk/reward ratio` (default 1.5:1) |
-| **Trailing Stop** | Activates after 20 pips profit; trails 15 pips behind peak price |
+| **Trailing Stop** | Activates after `TRAILING_STOP_ACTIVATION_PIPS` (default 7) pips profit; trails `TRAILING_STOP_DISTANCE_PIPS` (default 3) pips behind peak. State persisted to `data/managed_trades.json` — survives restarts |
+| **Trade age alert** | Fires after 72 market hours open (weekends Fri 22:00–Sun 22:00 UTC excluded) |
 | **Exposure breach** | Total exposure >150% of `MAX_TOTAL_EXPOSURE` → emergency close all |
 | **Max drawdown** | Account down ≥20% from starting balance → emergency shutdown |
 | **Daily loss limit** | Day's loss ≥5% of balance → halt trading |
@@ -107,6 +109,8 @@ Copy `.env.template` to `.env` and fill in all values before deployment.
 | `EVENT_CACHE_TTL_HOURS` | How long to cache calendar data (default: `1`) |
 | `CONSENSUS_THRESHOLD` | Minimum analyst confidence to proceed to reviewer (default: `0.60`) |
 | `MAX_DAILY_LOSS_PERCENT` | Max daily drawdown before trading halts (e.g. `2.0`) |
+| `TRAILING_STOP_ACTIVATION_PIPS` | Pips in profit before trailing stop activates (default: `7.0`) |
+| `TRAILING_STOP_DISTANCE_PIPS` | Pips the stop trails behind the peak price (default: `3.0`) |
 
 ---
 

@@ -4,30 +4,60 @@ This module handles:
 - Monitoring open positions
 - Updating trailing stops
 - Checking SL/TP proximity
-- Handling partial closes
 - Emergency position closure
 """
 
+import json
 import logging
+from pathlib import Path
 from typing import Optional, Dict, List, Set
 from dataclasses import dataclass, field
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from enum import Enum
 
 from src.broker.base import BaseBroker, Trade, Position, OrderSide
 from src.monitoring.logger import get_logger
 from src.monitoring.alerts import AlertManager
+from config.settings import settings
 
 
 class TradeAction(Enum):
     """Actions that can be taken on trades."""
     NONE = "none"
     CLOSE = "close"
-    PARTIAL_CLOSE = "partial_close"
     MODIFY_SL = "modify_sl"
     MODIFY_TP = "modify_tp"
     TRAILING_STOP = "trailing_stop"
     EMERGENCY_CLOSE = "emergency_close"
+
+
+def _market_hours_elapsed(start: datetime, end: datetime) -> float:
+    """Elapsed hours between start and end, excluding FX weekends (Fri 22:00–Sun 22:00 UTC)."""
+    utc = timezone.utc
+    if start.tzinfo is None:
+        start = start.replace(tzinfo=utc)
+    if end.tzinfo is None:
+        end = end.replace(tzinfo=utc)
+    if end <= start:
+        return 0.0
+
+    # Find the Friday 22:00 UTC on or before start
+    days_since_friday = (start.weekday() - 4) % 7
+    first_friday = (start - timedelta(days=days_since_friday)).replace(
+        hour=22, minute=0, second=0, microsecond=0
+    )
+
+    weekend_seconds = 0.0
+    weekend_start = first_friday
+    while weekend_start < end:
+        weekend_end = weekend_start + timedelta(hours=48)  # Sun 22:00 UTC
+        overlap_start = max(weekend_start, start)
+        overlap_end = min(weekend_end, end)
+        if overlap_end > overlap_start:
+            weekend_seconds += (overlap_end - overlap_start).total_seconds()
+        weekend_start += timedelta(weeks=1)
+
+    return ((end - start).total_seconds() - weekend_seconds) / 3600
 
 
 @dataclass
@@ -46,9 +76,8 @@ class ManagedTrade:
     
     @property
     def age_hours(self) -> float:
-        """Get trade age in hours."""
-        delta = datetime.now() - self.entry_time
-        return delta.total_seconds() / 3600
+        """Get trade age in market hours, excluding FX weekends."""
+        return _market_hours_elapsed(self.entry_time, datetime.now(timezone.utc))
 
 
 @dataclass
@@ -86,13 +115,17 @@ class TradeManager:
         
         # Managed trades tracking
         self.managed_trades: Dict[str, ManagedTrade] = {}
-        
+
+        # Persistent state
+        self._state_file = Path(__file__).parent.parent.parent / "data" / "managed_trades.json"
+        self._persisted_state: Dict[str, dict] = {}
+        self._load_state()
+
         # Configuration
         self.trailing_stop_enabled = True
-        self.trailing_stop_activation_pips = 7.0   # Activate after X pips profit
-        self.trailing_stop_distance_pips = 3.0     # Trail by X pips
+        self.trailing_stop_activation_pips = settings.TRAILING_STOP_ACTIVATION_PIPS
+        self.trailing_stop_distance_pips = settings.TRAILING_STOP_DISTANCE_PIPS
         self.max_trade_age_hours = 72.0            # Alert if trade older than this
-        self.partial_close_levels = [0.5, 0.75]    # Close 50% at 50% of TP, etc.
     
     def register_trade(
         self,
@@ -116,6 +149,7 @@ class TradeManager:
         managed = ManagedTrade(
             trade=trade,
             strategy_name=strategy_name,
+            entry_time=trade.open_time,
             initial_sl=trade.stop_loss,
             initial_tp=trade.take_profit,
             trailing_stop_active=trailing_stop,
@@ -138,6 +172,7 @@ class TradeManager:
         if trade_id in self.managed_trades:
             del self.managed_trades[trade_id]
             self.logger.info(f"Unregistered trade {trade_id}")
+            self._save_state()
     
     def sync_trades(self) -> Dict[str, str]:
         """
@@ -163,8 +198,19 @@ class TradeManager:
                 self.managed_trades[trade_id].trade = trade
                 result[trade_id] = "synced"
             else:
-                # New trade found at broker (manual or from another system)
-                self.register_trade(trade, strategy_name="unknown")
+                # Restore from persisted state if available, else treat as unknown
+                persisted = self._persisted_state.get(trade_id, {})
+                managed = self.register_trade(
+                    trade,
+                    strategy_name=persisted.get("strategy_name", "unknown"),
+                    trailing_stop=persisted.get("trailing_stop_active", False),
+                    trailing_distance=persisted.get("trailing_stop_distance", 0.0),
+                )
+                # Restore peak/trough price tracking so trailing stop continues correctly
+                if persisted:
+                    managed.highest_price = persisted.get("highest_price", trade.entry_price)
+                    managed.lowest_price = persisted.get("lowest_price", trade.entry_price)
+                    self.logger.info(f"Restored persisted state for trade {trade_id}")
                 result[trade_id] = "added"
         
         return result
@@ -202,7 +248,8 @@ class TradeManager:
                         f"{managed.age_hours:.0f} hours",
                         priority='WARNING'
                     )
-        
+
+        self._save_state()
         return results
     
     def _update_price_tracking(self, managed: ManagedTrade):
@@ -412,81 +459,42 @@ class TradeManager:
         
         # Clear managed trades
         self.managed_trades.clear()
+        self._save_state()
         
         return results
     
-    def modify_stop_loss(
-        self,
-        trade_id: str,
-        pair: str,
-        new_sl: float
-    ) -> TradeManagementResult:
-        """
-        Modify stop loss for a trade.
+    def _save_state(self) -> None:
+        """Persist managed trade metadata to disk."""
+        try:
+            data = {}
+            for trade_id, managed in self.managed_trades.items():
+                data[trade_id] = {
+                    "strategy_name": managed.strategy_name,
+                    "trailing_stop_active": managed.trailing_stop_active,
+                    "trailing_stop_distance": managed.trailing_stop_distance,
+                    "highest_price": managed.highest_price,
+                    "lowest_price": managed.lowest_price,
+                    "initial_sl": managed.initial_sl,
+                    "initial_tp": managed.initial_tp,
+                }
+            self._state_file.parent.mkdir(parents=True, exist_ok=True)
+            self._state_file.write_text(json.dumps(data, indent=2))
+            self._persisted_state = data
+        except Exception as e:
+            self.logger.warning(f"Could not save managed trades state: {e}")
 
-        Args:
-            trade_id: Trade ID
-            pair: Instrument pair (e.g. 'USD_CHF') for price formatting
-            new_sl: New stop loss price
+    def _load_state(self) -> None:
+        """Load persisted managed trade metadata from disk."""
+        try:
+            if self._state_file.exists():
+                self._persisted_state = json.loads(self._state_file.read_text())
+                self.logger.info(
+                    f"Loaded persisted state for {len(self._persisted_state)} trade(s)"
+                )
+        except Exception as e:
+            self.logger.warning(f"Could not load managed trades state: {e}")
+            self._persisted_state = {}
 
-        Returns:
-            TradeManagementResult
-        """
-        success = self.broker.modify_trade(trade_id, pair=pair, stop_loss=new_sl)
-        
-        if success:
-            self.logger.info(f"Modified SL for {trade_id}: {new_sl}")
-            return TradeManagementResult(
-                trade_id=trade_id,
-                action=TradeAction.MODIFY_SL,
-                success=True,
-                new_sl=new_sl
-            )
-        else:
-            self.logger.error(f"Failed to modify SL for {trade_id}")
-            return TradeManagementResult(
-                trade_id=trade_id,
-                action=TradeAction.MODIFY_SL,
-                success=False,
-                details="Broker rejected modification"
-            )
-    
-    def modify_take_profit(
-        self,
-        trade_id: str,
-        pair: str,
-        new_tp: float
-    ) -> TradeManagementResult:
-        """
-        Modify take profit for a trade.
-
-        Args:
-            trade_id: Trade ID
-            pair: Instrument pair (e.g. 'USD_CHF') for price formatting
-            new_tp: New take profit price
-
-        Returns:
-            TradeManagementResult
-        """
-        success = self.broker.modify_trade(trade_id, pair=pair, take_profit=new_tp)
-        
-        if success:
-            self.logger.info(f"Modified TP for {trade_id}: {new_tp}")
-            return TradeManagementResult(
-                trade_id=trade_id,
-                action=TradeAction.MODIFY_TP,
-                success=True,
-                new_tp=new_tp
-            )
-        else:
-            self.logger.error(f"Failed to modify TP for {trade_id}")
-            return TradeManagementResult(
-                trade_id=trade_id,
-                action=TradeAction.MODIFY_TP,
-                success=False,
-                details="Broker rejected modification"
-            )
-    
     def get_managed_trade(self, trade_id: str) -> Optional[ManagedTrade]:
         """Get a managed trade by ID."""
         return self.managed_trades.get(trade_id)

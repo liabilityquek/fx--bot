@@ -91,6 +91,10 @@ class Settings:
     DEFAULT_STOP_LOSS_PIPS: int = int(os.getenv('DEFAULT_STOP_LOSS_PIPS', '50'))
     DEFAULT_TAKE_PROFIT_RATIO: float = float(os.getenv('DEFAULT_TAKE_PROFIT_RATIO', '2.0'))
 
+    # Trailing stop
+    TRAILING_STOP_ACTIVATION_PIPS: float = float(os.getenv('TRAILING_STOP_ACTIVATION_PIPS', '7.0'))
+    TRAILING_STOP_DISTANCE_PIPS: float = float(os.getenv('TRAILING_STOP_DISTANCE_PIPS', '3.0'))
+
     # ==========================================
     # MONITORING & ALERTS (Telegram)
     # ==========================================

@@ -159,31 +159,55 @@ class OandaBroker(BaseBroker):
             self.logger.error(f"Error getting price for {pair}: {e}")
             return None
     
+    def _get_current_prices(self, instrument_list: List[str]) -> Dict[str, float]:
+        """Fetch mid (bid+ask)/2 prices for a list of OANDA instruments."""
+        try:
+            params = {"instruments": ",".join(instrument_list)}
+            endpoint = pricing.PricingInfo(accountID=self.account_id, params=params)
+            response = self._with_retry(lambda: self.api.request(endpoint))
+            result = {}
+            for price_data in response.get('prices', []):
+                bid = float(price_data['bids'][0]['price'])
+                ask = float(price_data['asks'][0]['price'])
+                result[price_data['instrument']] = (bid + ask) / 2
+            return result
+        except Exception as e:
+            self.logger.warning(f"Could not fetch current prices: {e}")
+            return {}
+
     def get_open_trades(self) -> List[Trade]:
         """Get all open trades."""
         try:
             endpoint = trades.OpenTrades(accountID=self.account_id)
             response = self._with_retry(lambda: self.api.request(endpoint))
-            
+
+            trade_list_raw = response.get('trades', [])
+            if not trade_list_raw:
+                return []
+
+            # Fetch live mid-prices for all open instruments in one API call
+            instruments_set = {t['instrument'] for t in trade_list_raw}
+            current_prices = self._get_current_prices(list(instruments_set))
+
             trade_list = []
-            
-            for trade_data in response.get('trades', []):
+            for trade_data in trade_list_raw:
+                instrument = trade_data['instrument']
                 trade = Trade(
                     trade_id=trade_data['id'],
-                    pair=trade_data['instrument'],
+                    pair=instrument,
                     side=OrderSide.BUY if float(trade_data['currentUnits']) > 0 else OrderSide.SELL,
                     units=abs(int(float(trade_data['currentUnits']))),
                     entry_price=float(trade_data['price']),
-                    current_price=float(trade_data.get('price', 0)),
+                    current_price=current_prices.get(instrument, float(trade_data['price'])),
                     stop_loss=float(trade_data.get('stopLossOrder', {}).get('price', 0)) or None,
                     take_profit=float(trade_data.get('takeProfitOrder', {}).get('price', 0)) or None,
                     unrealized_pnl=float(trade_data.get('unrealizedPL', 0)),
                     open_time=datetime.fromisoformat(trade_data['openTime'].replace('Z', '+00:00'))
                 )
                 trade_list.append(trade)
-            
+
             return trade_list
-            
+
         except V20Error as e:
             self.logger.error(f"OANDA API error getting open trades: {e}")
             return []
