@@ -73,7 +73,9 @@ class ManagedTrade:
     highest_price: float = 0.0  # For long trailing
     lowest_price: float = 0.0   # For short trailing
     partial_closes: List[Dict] = field(default_factory=list)
-    
+    break_even_triggered: bool = False
+    partial_tp_triggered: bool = False
+
     @property
     def age_hours(self) -> float:
         """Get trade age in market hours, excluding FX weekends."""
@@ -125,6 +127,8 @@ class TradeManager:
         self.trailing_stop_enabled = True
         self.trailing_stop_activation_pips = settings.TRAILING_STOP_ACTIVATION_PIPS
         self.trailing_stop_distance_pips = settings.TRAILING_STOP_DISTANCE_PIPS
+        self.break_even_activation_pips = settings.BREAK_EVEN_ACTIVATION_PIPS
+        self.break_even_buffer_pips = settings.BREAK_EVEN_BUFFER_PIPS
         self.max_trade_age_hours = 72.0            # Alert if trade older than this
     
     def register_trade(
@@ -210,6 +214,8 @@ class TradeManager:
                 if persisted:
                     managed.highest_price = persisted.get("highest_price", trade.entry_price)
                     managed.lowest_price = persisted.get("lowest_price", trade.entry_price)
+                    managed.break_even_triggered = persisted.get("break_even_triggered", False)
+                    managed.partial_tp_triggered = persisted.get("partial_tp_triggered", False)
                     self.logger.info(f"Restored persisted state for trade {trade_id}")
                 result[trade_id] = "added"
         
@@ -230,7 +236,13 @@ class TradeManager:
         for trade_id, managed in list(self.managed_trades.items()):
             # Update price tracking for trailing stops
             self._update_price_tracking(managed)
-            
+
+            # Check break-even
+            self._check_break_even(managed)
+
+            # Check partial TP
+            self._check_partial_tp(managed)
+
             # Check trailing stop
             if managed.trailing_stop_active:
                 result = self._check_trailing_stop(managed)
@@ -336,6 +348,79 @@ class TradeManager:
         
         return None
     
+    def _check_break_even(self, managed: ManagedTrade) -> None:
+        """Move SL to break-even when profit_pips >= BREAK_EVEN_ACTIVATION_PIPS."""
+        if managed.break_even_triggered:
+            return
+        trade = managed.trade
+        pip_size = 0.01 if 'JPY' in trade.pair else 0.0001
+        if trade.is_long:
+            profit_pips = (trade.current_price - trade.entry_price) / pip_size
+        else:
+            profit_pips = (trade.entry_price - trade.current_price) / pip_size
+        if profit_pips < self.break_even_activation_pips:
+            return
+        buffer = self.break_even_buffer_pips * pip_size
+        if trade.is_long:
+            new_sl = trade.entry_price + buffer
+            if trade.stop_loss and new_sl <= trade.stop_loss:
+                return  # Current SL already better
+        else:
+            new_sl = trade.entry_price - buffer
+            if trade.stop_loss and new_sl >= trade.stop_loss:
+                return  # Current SL already better
+        success = self.broker.modify_trade(
+            trade_id=trade.trade_id,
+            pair=trade.pair,
+            stop_loss=new_sl,
+        )
+        if success:
+            managed.break_even_triggered = True
+            self.logger.info(
+                f"Break-even set for {trade.trade_id} ({trade.pair}): SL -> {new_sl:.5f}"
+            )
+
+    def _check_partial_tp(self, managed: ManagedTrade) -> None:
+        """Close partial position at 1:1 RR target."""
+        if not settings.PARTIAL_TP_ENABLED:
+            return
+        if managed.partial_tp_triggered:
+            return
+        if managed.initial_sl is None:
+            return
+        trade = managed.trade
+        pip_size = 0.01 if 'JPY' in trade.pair else 0.0001
+        sl_pips = abs(trade.entry_price - managed.initial_sl) / pip_size
+        if sl_pips == 0:
+            return
+        target_pips = sl_pips * settings.PARTIAL_TP_RR_TARGET
+        if trade.is_long:
+            profit_pips = (trade.current_price - trade.entry_price) / pip_size
+        else:
+            profit_pips = (trade.entry_price - trade.current_price) / pip_size
+        if profit_pips < target_pips:
+            return
+        units_to_close = int(abs(trade.units) * settings.PARTIAL_TP_RATIO)
+        if units_to_close < 1:
+            return
+        success = self.broker.partial_close_trade(trade.trade_id, units_to_close)
+        if success:
+            managed.partial_tp_triggered = True
+            managed.break_even_triggered = True  # Move to break-even simultaneously
+            self.logger.info(
+                f"Partial TP: {trade.pair} trade {trade.trade_id} — "
+                f"closed {units_to_close} units at ~{profit_pips:.1f} pips profit"
+            )
+            if self.alert_manager:
+                try:
+                    self.alert_manager._send_telegram(
+                        f"Partial TP: {trade.pair} — closed {units_to_close} units "
+                        f"at {profit_pips:.1f} pips ({settings.PARTIAL_TP_RATIO*100:.0f}% of position)",
+                        parse_mode=''
+                    )
+                except Exception:
+                    pass
+
     def close_trade(
         self,
         trade_id: str,
@@ -476,6 +561,8 @@ class TradeManager:
                     "lowest_price": managed.lowest_price,
                     "initial_sl": managed.initial_sl,
                     "initial_tp": managed.initial_tp,
+                    "break_even_triggered": managed.break_even_triggered,
+                    "partial_tp_triggered": managed.partial_tp_triggered,
                 }
             self._state_file.parent.mkdir(parents=True, exist_ok=True)
             self._state_file.write_text(json.dumps(data, indent=2))

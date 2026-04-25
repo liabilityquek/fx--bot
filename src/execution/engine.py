@@ -34,6 +34,7 @@ from src.execution.trade_manager import TradeManager
 from src.voting.engine import DecisionResult, DecisionEngine
 from src.agents.base import Signal
 from src.news.suspension_manager import SuspensionManager
+from src.risk.conflict_checker import TradeConflictChecker
 
 
 class TradingEngine:
@@ -71,6 +72,7 @@ class TradingEngine:
             logger=self.logger,
             alert_manager=self.alert_manager,
         )
+        self.conflict_checker = TradeConflictChecker(allow_hedging=False)
 
         # News suspension (Rule 1 & 2) — only active when event_monitor provided
         self.suspension_manager = (
@@ -273,6 +275,7 @@ class TradingEngine:
 
         # 5. Process each pair (normal days only)
         if not is_holiday:
+            self._cycle_pair_prices: dict = {}
             for pair in settings.TRADING_PAIRS:
                 if self._daily_loss_halted:
                     break
@@ -332,8 +335,29 @@ class TradingEngine:
             return
         price = (price_info['bid'] + price_info['ask']) / 2
 
+        # Accumulate pair prices for USD sentiment (prev close, current close)
+        if len(candles) >= 2:
+            prev_close = float(candles[-2].get('close', 0) or (candles[-2].get('mid', {}).get('c', 0)))
+            curr_close = float(candles[-1].get('close', 0) or (candles[-1].get('mid', {}).get('c', 0)))
+            self._cycle_pair_prices[pair] = (prev_close, curr_close)
+
+        # Fetch higher-timeframe candles for MTF bias (non-fatal)
+        htf_candles: dict = {}
+        try:
+            d1 = self.broker.get_historical_candles(pair, granularity='D', count=60) or []
+            if d1:
+                htf_candles['D1'] = d1
+        except Exception:
+            pass
+        try:
+            h4 = self.broker.get_historical_candles(pair, granularity='H4', count=60) or []
+            if h4:
+                htf_candles['H4'] = h4
+        except Exception:
+            pass
+
         # Run decision pipeline
-        result: DecisionResult = self.decision_engine.run_decision(pair, candles, price)
+        result: DecisionResult = self.decision_engine.run_decision(pair, candles, price, pair_prices=self._cycle_pair_prices, htf_candles=htf_candles)
         self._log_vote_result(result)
 
         if result.final_signal == Signal.HOLD:
@@ -354,6 +378,37 @@ class TradingEngine:
                         f"(net_units={pos.net_units})"
                     )
                     return
+
+        # USD correlation guard — limit correlated USD-directional exposure
+        usd_short_pairs = {'EUR_USD', 'GBP_USD', 'AUD_USD'}
+        usd_long_pairs = {'USD_JPY', 'USD_CHF'}
+        new_is_usd_short = (pair in usd_short_pairs and is_long) or (pair in usd_long_pairs and not is_long)
+        new_is_usd_long  = (pair in usd_long_pairs and is_long) or (pair in usd_short_pairs and not is_long)
+
+        open_usd_short = sum(
+            1 for pos in positions if not pos.is_flat and (
+                (pos.pair in usd_short_pairs and pos.is_long) or
+                (pos.pair in usd_long_pairs and pos.is_short)
+            )
+        )
+        open_usd_long = sum(
+            1 for pos in positions if not pos.is_flat and (
+                (pos.pair in usd_long_pairs and pos.is_long) or
+                (pos.pair in usd_short_pairs and pos.is_short)
+            )
+        )
+
+        max_corr = settings.MAX_USD_CORRELATED_TRADES
+        if new_is_usd_short and open_usd_short >= max_corr:
+            self.logger.info(
+                f"{pair}: USD overexposure blocked — {open_usd_short} USD-short positions already open (max {max_corr})"
+            )
+            return
+        if new_is_usd_long and open_usd_long >= max_corr:
+            self.logger.info(
+                f"{pair}: USD overexposure blocked — {open_usd_long} USD-long positions already open (max {max_corr})"
+            )
+            return
 
         # SL/TP via ATR
         entry_price = price_info['ask'] if is_long else price_info['bid']
@@ -564,6 +619,7 @@ class TradingEngine:
         lines = [
             f"{prefix}TRADE OPENED -- {pair}",
             f"Direction: {result.final_signal.value}",
+            f"Setup: {result.setup_type}",
             f"Entry: {entry_price:.5f}",
             f"SL: {stop_loss:.5f} | TP: {take_profit:.5f}",
             f"Size: {units / 100_000:.2f} lots",

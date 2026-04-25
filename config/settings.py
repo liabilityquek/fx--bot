@@ -61,6 +61,7 @@ class Settings:
     # ==========================================
     MAX_DAILY_DRAWDOWN: float = float(os.getenv('MAX_DAILY_DRAWDOWN', '0.05'))
     MAX_CONSECUTIVE_LOSSES: int = int(os.getenv('MAX_CONSECUTIVE_LOSSES', '5'))
+    MAX_USD_CORRELATED_TRADES: int = int(os.getenv('MAX_USD_CORRELATED_TRADES', '2'))
     CIRCUIT_BREAKER_COOLDOWN_MINUTES: int = int(os.getenv('CIRCUIT_BREAKER_COOLDOWN_MINUTES', '60'))
     MAX_ORDERS_PER_MINUTE: int = int(os.getenv('MAX_ORDERS_PER_MINUTE', '10'))
 
@@ -95,6 +96,15 @@ class Settings:
     TRAILING_STOP_ACTIVATION_PIPS: float = float(os.getenv('TRAILING_STOP_ACTIVATION_PIPS', '7.0'))
     TRAILING_STOP_DISTANCE_PIPS: float = float(os.getenv('TRAILING_STOP_DISTANCE_PIPS', '3.0'))
 
+    # Break-even stop
+    BREAK_EVEN_ACTIVATION_PIPS: float = float(os.getenv('BREAK_EVEN_ACTIVATION_PIPS', '5.0'))
+    BREAK_EVEN_BUFFER_PIPS: float = float(os.getenv('BREAK_EVEN_BUFFER_PIPS', '1.0'))
+
+    # Partial take-profits
+    PARTIAL_TP_ENABLED: bool = os.getenv('PARTIAL_TP_ENABLED', 'true').lower() == 'true'
+    PARTIAL_TP_RATIO: float = float(os.getenv('PARTIAL_TP_RATIO', '0.5'))
+    PARTIAL_TP_RR_TARGET: float = float(os.getenv('PARTIAL_TP_RR_TARGET', '1.0'))
+
     # ==========================================
     # MONITORING & ALERTS (Telegram)
     # ==========================================
@@ -113,6 +123,7 @@ class Settings:
     # ECONOMIC CALENDAR
     # ==========================================
     JB_NEWS_API_KEY: str = os.getenv('JB_NEWS_API_KEY', '')
+    FRED_API_KEY: str = os.getenv('FRED_API_KEY', '')   # free from fred.stlouisfed.org
     # Rule 1 & 2 — suspension window
     NEWS_SUSPEND_BEFORE_MINUTES: int = int(os.getenv('NEWS_SUSPEND_BEFORE_MINUTES', '30'))
     NEWS_RESUME_AFTER_MINUTES: int = int(os.getenv('NEWS_RESUME_AFTER_MINUTES', '30'))
@@ -125,6 +136,16 @@ class Settings:
         'HIGH_IMPACT_EVENTS',
         'NFP,FOMC,GDP,CPI,Interest Rate,Central Bank'
     ).split(',')
+
+    # ==========================================
+    # CENTRAL BANK RATES
+    # ==========================================
+    CB_RATE_USD: float = float(os.getenv('CB_RATE_USD', '4.50'))
+    CB_RATE_EUR: float = float(os.getenv('CB_RATE_EUR', '2.40'))
+    CB_RATE_GBP: float = float(os.getenv('CB_RATE_GBP', '4.50'))
+    CB_RATE_JPY: float = float(os.getenv('CB_RATE_JPY', '0.50'))
+    CB_RATE_CHF: float = float(os.getenv('CB_RATE_CHF', '0.25'))
+    CB_RATE_AUD: float = float(os.getenv('CB_RATE_AUD', '4.10'))
 
     # ==========================================
     # SYSTEM

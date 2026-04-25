@@ -3,7 +3,7 @@
 from typing import Dict, List, Optional
 
 from .base import AgentVote, BaseAgent, Signal
-from .indicators import adx, atr, ema, to_dataframe
+from .indicators import adx, atr, ema, market_structure, to_dataframe
 
 
 class TrendAgent(BaseAgent):
@@ -36,6 +36,12 @@ class TrendAgent(BaseAgent):
                 result['trend'] = 'bearish'
             else:
                 result['trend'] = 'neutral'
+
+        ms = market_structure(df)
+        if ms is not None:
+            result['market_structure'] = ms[0]
+            result['nearest_resistance'] = round(ms[1], 5)
+            result['nearest_support'] = round(ms[2], 5)
 
         return result
 

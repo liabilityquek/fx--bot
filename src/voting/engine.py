@@ -38,6 +38,7 @@ class DecisionResult:
     reviewer_verdict: str       # APPROVED / ADJUSTED / REJECTED / SKIPPED / UNAVAILABLE
     reviewer_reason: str
     reviewer_available: bool
+    setup_type: str = "NONE"
 
 
 class DecisionEngine:
@@ -66,7 +67,7 @@ class DecisionEngine:
     # Public interface
     # ------------------------------------------------------------------
 
-    def run_decision(self, pair: str, candles: List[Dict], price: float) -> DecisionResult:
+    def run_decision(self, pair: str, candles: List[Dict], price: float, pair_prices: Optional[dict] = None, htf_candles: Optional[dict] = None) -> DecisionResult:
         """Run the full decision pipeline and return a DecisionResult."""
         threshold = settings.CONSENSUS_THRESHOLD
 
@@ -79,13 +80,13 @@ class DecisionEngine:
         # 2. Build macro context (fails silently)
         macro: dict = {}
         try:
-            macro = self._macro.build(pair)
+            macro = self._macro.build(pair, pair_prices=pair_prices)
         except Exception as exc:
             self.logger.debug(f"MacroContext.build failed for {pair}: {exc}")
 
         # 3. LLM analyst vote
         llm_vote: AgentVote = self._llm.vote(
-            pair, candles, price, indicators, macro_context=macro
+            pair, candles, price, indicators, macro_context=macro, htf_candles=htf_candles
         )
         llm_available = self._llm.is_available and llm_vote.reasoning not in (
             "LLM call failed", "All LLM providers exhausted"
@@ -112,6 +113,7 @@ class DecisionEngine:
                 reviewer_verdict='SKIPPED',
                 reviewer_reason='LLM HOLD or confidence below threshold',
                 reviewer_available=True,
+                setup_type='NONE',
             )
             self._last_results[pair] = result
             return result
@@ -153,6 +155,7 @@ class DecisionEngine:
             reviewer_verdict=rev_verdict,
             reviewer_reason=rev_reason,
             reviewer_available=review.reviewer_available,
+            setup_type=llm_vote.setup_type,
         )
         self._last_results[pair] = result
         return result

@@ -70,11 +70,15 @@ Before doing anything, the bot checks whether it's even allowed to trade right n
 
 ### Step 2 — Collecting Data
 
-The bot fetches the last 100 hours of price history for each currency pair. Think of it as looking at the last 100 days on a chart.
+The bot fetches price history for each currency pair across three timeframes:
+- **Last 100 hours (H1)** — the primary analysis chart
+- **Last 60 days (D1)** — daily trend direction
+- **Last 60 four-hour bars (H4)** — medium-term momentum
 
 It also collects:
 - The current live prices (what you'd actually pay right now to buy or sell)
-- Interest rates set by major central banks around the world
+- Interest rates set by major central banks around the world (fetched automatically from the St. Louis Fed database, updated every 24 hours)
+- A **USD strength score** computed from how all 5 currency pairs have moved recently — tells the bot whether the Dollar is broadly strengthening or weakening
 - Recent news headlines about each currency
 - Any major announcements expected in the next 24 hours (like government jobs reports or central bank meetings)
 
@@ -100,6 +104,14 @@ Three separate math tools analyse the price history and produce measurements. Th
                          to the AI for analysis
 ```
 
+The Trend Checker also runs a **market structure analysis** on the last 50 price bars. It identifies recent swing highs and lows, then classifies the market as one of three states:
+
+- **Bullish structure** — price is making higher highs and higher lows (buyers in control)
+- **Bearish structure** — price is making lower highs and lower lows (sellers in control)
+- **Ranging** — no clear direction
+
+It also identifies the nearest resistance level above the current price and the nearest support level below it. The AI receives all of this.
+
 No decisions are made here — just raw measurements. The AI gets all these numbers in the next step.
 
 ---
@@ -115,6 +127,7 @@ The AI is asked a simple question:
 The AI responds with:
 - A decision: **BUY**, **SELL**, or **DO NOTHING**
 - A confidence score: a number between 0 and 1 (e.g. 0.72 means 72% confident)
+- A setup type: what kind of trade this is (BREAKOUT, PULLBACK, REVERSAL, LIQUIDITY_SWEEP, or RANGE)
 - A brief reason why
 
 ```
@@ -123,6 +136,7 @@ The AI responds with:
 │                                                   │
 │  Decision:    SELL                               │
 │  Confidence:  0.72  (72%)                        │
+│  Setup:       PULLBACK                           │
 │  Reason:      "Price is at a high level while    │
 │                upcoming news favours a drop.      │
 │                Carry trade also points to sell."  │
@@ -227,36 +241,46 @@ Max loss on this trade: $200
 
 ### Step 7 — Managing Open Trades
 
-While a trade is open, the bot keeps watching it every hour.
+While a trade is open, the bot checks it every hour in this order:
 
-**Trailing protection (locking in profits):**
+**1. Break-even stop (at +5 pips profit)**
 
-Once a trade is 7 pips in profit, the bot automatically moves the safety exit to follow the price — always staying 3 pips behind. This way, if the price suddenly reverses, you still walk away with a profit instead of nothing.
+Once a trade is 5 pips in profit, the bot moves the safety exit to your entry price + 1 pip. From this point, you cannot lose money on this trade — the worst outcome is a tiny profit.
 
-Both values are configurable via `.env`: `TRAILING_STOP_ACTIVATION_PIPS` (default 7) and `TRAILING_STOP_DISTANCE_PIPS` (default 3).
+**2. Partial take-profit (at 1:1 risk/reward)**
 
-The trailing stop state is saved to disk — if the bot restarts, it picks up exactly where it left off on all open trades.
+Once profit equals the original risk (e.g. if you risked 100 pips, once you're +100 pips), the bot closes half the position and pockets that profit. The other half stays open to ride toward the full target. At this point, the safety exit is already at break-even — so the remaining half is a free trade.
+
+**3. Trailing protection (at +7 pips profit)**
+
+Once a trade is 7 pips in profit, the bot automatically moves the safety exit to follow the price — always staying 3 pips behind the best price reached. If the price reverses, the trade closes automatically with a profit.
+
+All three thresholds are configurable in `.env`. The full trade state is saved to disk — if the bot restarts, it picks up exactly where it left off.
 
 ```
-Price moves in your favour (SELL trade, price falling):
+Example — SELL trade at 1.0948 with 100 pip SL:
 
-  Trade opened at ──────────────────► 1.0948  (entry)
-  Safety exit starts at ────────────► 1.1000  (50 pips away)
+  Trade opens ──────────────────────► 1.0948  (entry)
+  Safety exit ──────────────────────► 1.1000  (100 pips above, SL)
+  Full profit target ───────────────► 1.0748  (200 pips below, TP at 1:2 RR)
 
-  Price drops to 1.0941 (7 pips profit):
-  Trailing stop activates.
-  Safety exit moves to ─────────────► 1.0944  (3 pips behind peak)
+  Price drops to 1.0943  (+5 pips):
+  Safety exit moves to ─────────────► 1.0947  (break-even + 1 pip buffer)
+  You can no longer lose money on this trade.
 
-  Price keeps dropping to 1.0920 (28 pips profit):
+  Price drops to 1.0848  (+100 pips, 1:1 RR):
+  Partial close: 50% of position closed. Profit locked.
+  Remaining 50% rides toward 1.0748.
+
+  Price drops to 1.0920  (+28 pips, trailing active):
   Safety exit moves to ─────────────► 1.0923  (3 pips behind peak)
 
   Price reverses and hits 1.0923:
-  Trade closes automatically. Profit locked in.
+  Remaining position closes automatically. Profit locked in.
 ```
 
 **Warning alerts the bot sends you:**
 - Trade has been open for more than 72 market hours (weekends excluded)
-- Price is getting very close to the safety exit or profit exit
 - Unrealised loss on a trade is getting unusually large
 - Total risk across all open trades is getting too high
 
@@ -329,9 +353,12 @@ You can message the bot directly on Telegram to check on things or take control:
 | `/resume` | Turns trading back on after a `/stop`. |
 | `/status` | Shows your balance, total profit/loss, and any open trades. |
 | `/calendar` | Shows upcoming major announcements in the next 24 hours. |
-| `/analyst` | Shows what the AI analyst decided for each currency pair. |
-| `/reviewer` | Shows what the reviewing AI decided. |
+| `/calhistory` | Shows major announcements that already happened today. |
+| `/analyst` | Shows what the AI analyst decided for each currency pair (signal, confidence, setup type, reasoning). |
+| `/reviewer` | Shows what the reviewing AI decided (APPROVED / ADJUSTED / REJECTED + reason). |
+| `/credits` | Shows which AI provider is currently active (Groq or Anthropic fallback). |
 | `/logs` | Shows today's activity log. |
+| `/help` | Shows the full command list. |
 
 ---
 
@@ -353,6 +380,12 @@ The bot connects to several external services:
 │                                                            │
 │  Anthropic / Claude (Backup AI)                           │
 │    Used if the primary AI is unavailable.                 │
+│                                                            │
+│  FRED — St. Louis Fed (Central Bank Rates)                │
+│    Free database maintained by the US Federal Reserve.    │
+│    Provides official central bank policy rates for all    │
+│    6 currencies. Fetched once every 24 hours.             │
+│    Rates are used to calculate carry trade advantage.     │
 │                                                            │
 │  News Calendar API                                        │
 │    Provides upcoming economic announcements and           │
@@ -446,19 +479,20 @@ The bot connects to several external services:
 | Time | What Happens |
 |---|---|
 | 1:00 PM | Cycle starts. Safety checks pass. |
-| 1:02 PM | Fetches price history for Euro/Dollar. Current price: 1.0948. |
-| 1:03 PM | Math tools note: price looks stretched upward. Momentum is weakening. |
-| 1:04 PM | Recent news and interest rates favour the Dollar over the Euro. No major announcements for 4 hours. |
-| 1:05 PM | AI Analyst says: **SELL Euro/Dollar. Confidence: 68%.** |
+| 1:02 PM | Fetches H1, D1, H4 price history for Euro/Dollar. Current price: 1.0948. |
+| 1:03 PM | Math tools note: bearish market structure. Price at resistance. Momentum weakening. D1 trend bearish. |
+| 1:04 PM | USD sentiment: STRONG (+0.60). Interest rates favour Dollar. No major announcements for 4 hours. |
+| 1:05 PM | AI Analyst says: **SELL Euro/Dollar. Confidence: 68%. Setup: PULLBACK.** |
 | 1:06 PM | 68% > 60% threshold. Signal is SELL. Proceeds to reviewer. |
-| 1:07 PM | AI Reviewer checks: calendar is clear, reasoning is sound. **APPROVED.** |
-| 1:08 PM | Bot calculates: 2% of $10k = $200 max loss. Safety exit at 50 units. Size = 40,000 units. |
-| 1:09 PM | Trade placed: SELL 40,000 units at 1.0948. Safety exit at 1.1000. Profit exit at 1.0925. |
-| 1:10 PM | Telegram message sent: "New trade opened — SELL Euro/Dollar." |
-| 2:00 PM | Next cycle. Trade is 13 pips in profit. Trailing protection not yet active (needs 7 pips). |
-| 3:00 PM | Price is now 25 pips in profit. Trailing protection is active. Safety exit now trails 3 pips behind peak at 1.0923. |
-| 3:30 PM | Price reaches 1.0925 — the profit exit. Trade closes automatically. |
-| 3:31 PM | Telegram: "Trade closed at target. Profit: +$276. Account: $10,276." |
+| 1:07 PM | AI Reviewer checks: calendar clear, reasoning consistent with data. **APPROVED.** |
+| 1:08 PM | Bot calculates: 2% of $10k = $200 max loss. ATR-based SL = 52 pips. Size = 38,000 units. |
+| 1:09 PM | Trade placed: SELL 38,000 units at 1.0948. Safety exit at 1.1000. Profit exit at 1.0844 (1:2 RR). |
+| 1:10 PM | Telegram: "SELL Euro/Dollar opened. Setup: PULLBACK. Size: 0.38 lots." |
+| 2:00 PM | Price at 1.0943. +5 pips profit. **Break-even activates** — safety exit moves to 1.0947. |
+| 3:00 PM | Price at 1.0896. +52 pips profit (1:1 RR). **Partial TP fires** — 50% closed. $104 profit locked in. |
+| 4:00 PM | Price at 1.0875. Trailing stop 3 pips behind peak. Safety exit at 1.0878. |
+| 4:30 PM | Price reaches 1.0844 — full profit exit. Remaining 50% closes automatically. |
+| 4:31 PM | Telegram: "Trade closed at target. Total profit: +$212. Account: $10,212." |
 
 ---
 
@@ -471,9 +505,10 @@ Its core design principles are:
 1. **Never bet the house** — 2% risk limit per trade, every time
 2. **Always have an exit** — Safety exit is placed at the broker the moment a trade opens
 3. **Two AIs must agree** — One to find the opportunity, one to sanity-check it
-4. **Avoid danger zones** — No new trades around major announcements
-5. **Know when to stop** — Multiple automatic shutdown triggers if things go wrong
-6. **Keep you informed** — Every significant event triggers a Telegram message
+4. **Avoid danger zones** — No new trades around major announcements, and no piling into the same USD direction
+5. **Protect profits in stages** — Break-even at +5 pips, partial close at 1:1, trailing stop from +7 pips
+6. **Know when to stop** — Multiple automatic shutdown triggers if things go wrong
+7. **Keep you informed** — Every significant event triggers a Telegram message
 
 ---
 

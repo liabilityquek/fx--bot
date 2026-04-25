@@ -238,3 +238,78 @@ def fisher_transform(
         return None
 
     return fisher_now, signal_now, fisher_prev, signal_prev
+
+
+# ---------------------------------------------------------------------------
+# Market Structure — swing high/low classification
+# ---------------------------------------------------------------------------
+
+def market_structure(
+    df: pd.DataFrame,
+    lookback: int = 50,
+    swing_window: int = 5,
+) -> Optional[Tuple[str, float, float]]:
+    """Classify recent market structure and identify key S/R levels.
+
+    Args:
+        df: OHLCV DataFrame
+        lookback: Number of candles to analyse (default 50)
+        swing_window: Bars each side for swing point detection (default 5)
+
+    Returns:
+        (structure_label, nearest_resistance, nearest_support) or None.
+        structure_label: 'bullish_structure' | 'bearish_structure' | 'ranging'
+        nearest_resistance: closest swing high above current price
+        nearest_support: closest swing low below current price
+    """
+    min_bars = lookback + swing_window * 2
+    if len(df) < min_bars:
+        return None
+
+    sub = df.tail(lookback).reset_index(drop=True)
+    highs = sub['high']
+    lows = sub['low']
+    closes = sub['close']
+    current_price = float(closes.iloc[-1])
+
+    # Detect swing highs and lows using a rolling window
+    swing_highs: List[float] = []
+    swing_lows: List[float] = []
+
+    for i in range(swing_window, len(sub) - swing_window):
+        window_high = highs.iloc[i - swing_window: i + swing_window + 1]
+        if highs.iloc[i] == window_high.max():
+            swing_highs.append(float(highs.iloc[i]))
+
+        window_low = lows.iloc[i - swing_window: i + swing_window + 1]
+        if lows.iloc[i] == window_low.min():
+            swing_lows.append(float(lows.iloc[i]))
+
+    if len(swing_highs) < 2 or len(swing_lows) < 2:
+        return None
+
+    # Use last 2 swing highs and swing lows for structure classification
+    sh1, sh2 = swing_highs[-2], swing_highs[-1]  # older, newer
+    sl1, sl2 = swing_lows[-2], swing_lows[-1]
+
+    hh = sh2 > sh1   # higher high
+    lh = sh2 < sh1   # lower high
+    hl = sl2 > sl1   # higher low
+    ll = sl2 < sl1   # lower low
+
+    if hh and hl:
+        label = 'bullish_structure'
+    elif lh and ll:
+        label = 'bearish_structure'
+    else:
+        label = 'ranging'
+
+    # Nearest resistance = lowest swing high above current price
+    above = [h for h in swing_highs if h > current_price]
+    resistance = min(above) if above else swing_highs[-1]
+
+    # Nearest support = highest swing low below current price
+    below = [l for l in swing_lows if l < current_price]
+    support = max(below) if below else swing_lows[-1]
+
+    return label, resistance, support

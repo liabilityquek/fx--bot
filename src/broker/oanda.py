@@ -448,6 +448,24 @@ class OandaBroker(BaseBroker):
             self.logger.error(f"Error modifying trade {trade_id}: {e}")
             return False
 
+    def partial_close_trade(self, trade_id: str, units: int) -> bool:
+        """Partially close `units` of an open OANDA trade."""
+        try:
+            ep = trades.TradeClose(
+                self.account_id,
+                trade_id,
+                data={"units": str(abs(units))},
+            )
+            self._with_retry(lambda: self.api.request(ep))
+            self.logger.info(f"Partial close: trade {trade_id} reduced by {units} units")
+            return True
+        except V20Error as e:
+            self.logger.error(f"OANDA error partial-closing {trade_id}: {e}")
+            return False
+        except Exception as e:
+            self.logger.error(f"Error partial-closing {trade_id}: {e}")
+            return False
+
     def get_historical_candles(
         self,
         pair: str,

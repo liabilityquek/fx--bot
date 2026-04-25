@@ -11,17 +11,28 @@ TradingEngine (H1 loop)
 ├── Kill switch check (file / env / Telegram /stop)
 ├── Weekend guard (blocks Sat/Sun + pre-close Friday window)
 ├── Holiday guard (blocks FX market holidays via NYSE calendar)
-├── Candle fetch (OANDA)
+├── Candle fetch — H1 (primary) + D1 + H4 (multi-timeframe bias)
+├── USD correlation guard (blocks overexposure to same USD direction)
 ├── DecisionEngine
 │   ├── Technical agents (TechAgent, TrendAgent, MomentumAgent — indicators only)
-│   ├── MacroContext (rate differentials + JB News headlines + upcoming events)
+│   │   └── Market structure detection (HH/HL/LH/LL, swing S/R levels)
+│   ├── MacroContext
+│   │   ├── Rate differentials (FRED API auto-fetch, 24h cache — falls back to .env)
+│   │   ├── USD sentiment score (computed from all 5 pair price changes)
+│   │   ├── JB News headlines
+│   │   └── Upcoming high-impact events (EventMonitor)
 │   ├── LLMAgent / Analyst (Groq llama-3.3-70b-versatile, Anthropic Claude Haiku as backup)
+│   │   └── Receives H1 indicators + D1/H4 bias + macro context + USD sentiment
 │   └── ReviewerAgent (Groq llama-3.1-8b-instant, Anthropic Claude Haiku as backup)
+├── TradeManager (per-cycle)
+│   ├── Break-even stop (moves SL to entry after N pips profit)
+│   ├── Partial take-profit (closes 50% at 1:1 RR)
+│   └── Trailing stop (follows price after activation threshold)
 ├── OrderExecutor (OANDA API, retry + slippage tracking)
 └── AlertsManager (Telegram alerts out, commands in)
 ```
 
-**Stack:** Python 3.11, Docker, OANDA API, Groq API (Llama 3.3 70B), Anthropic API (Claude Haiku, backup), Telegram Bot API, JB News API, exchange_calendars
+**Stack:** Python 3.11, Docker, OANDA API, Groq API (Llama 3.3 70B), Anthropic API (Claude Haiku, backup), Telegram Bot API, JB News API, FRED API (St. Louis Fed), exchange_calendars
 
 ---
 
@@ -29,15 +40,18 @@ TradingEngine (H1 loop)
 
 Every cycle per pair:
 
-1. Technical agents compute indicators (no votes — raw numbers only)
-2. MacroContext assembles rate differentials, news headlines, and upcoming high-impact events
-3. **LLMAgent (Analyst)** receives all data and returns BUY / SELL / HOLD + confidence score
-4. If HOLD or confidence < `CONSENSUS_THRESHOLD` (default 0.60) → skip, no trade
-5. **ReviewerAgent** checks the analyst's decision for consistency
+1. Technical agents compute indicators — RSI, MACD, EMA20/50, ADX, ATR, Bollinger, Fisher Transform, **market structure** (HH/HL/LH/LL, swing S/R levels)
+2. D1 and H4 candles fetched for higher-timeframe bias (EMA20/50 + ADX per timeframe)
+3. USD sentiment score computed from close-price changes across all 5 pairs
+4. MacroContext assembles: rate differentials (FRED auto-fetch), USD sentiment, news headlines, upcoming events
+5. USD correlation guard — if `MAX_USD_CORRELATED_TRADES` (default 2) already open in same USD direction → skip pair
+6. **LLMAgent (Analyst)** receives all data and returns BUY / SELL / HOLD + confidence + `setup_type` (BREAKOUT / PULLBACK / REVERSAL / LIQUIDITY_SWEEP / RANGE)
+7. If HOLD or confidence < `CONSENSUS_THRESHOLD` (default 0.60) → skip, no trade
+8. **ReviewerAgent** checks the analyst's decision for consistency
    - APPROVED → trade executes
-   - ADJUSTED → modified signal executes
+   - ADJUSTED → modified confidence, may drop below threshold → no trade
    - REJECTED → trade blocked
-6. If either AI provider is unavailable → HOLD, Telegram alert fired
+9. If either AI provider is unavailable → HOLD, Telegram alert fired
 
 ---
 
@@ -75,16 +89,20 @@ Trades are closed under the following conditions:
 
 | Trigger | Detail |
 |---------|--------|
-| **Stop Loss** | Broker-side order. Calculated via fixed pips, ATR (2× multiplier), or percentage of entry |
-| **Take Profit** | Broker-side order. Set at `SL distance × risk/reward ratio` (default 1.5:1) |
-| **Trailing Stop** | Activates after `TRAILING_STOP_ACTIVATION_PIPS` (default 7) pips profit; trails `TRAILING_STOP_DISTANCE_PIPS` (default 3) pips behind peak. State persisted to `data/managed_trades.json` — survives restarts |
+| **Stop Loss** | Broker-side order. SL distance = 2× ATR; fallback to `DEFAULT_STOP_LOSS_PIPS` if ATR unavailable |
+| **Take Profit** | Broker-side order. TP = `SL distance × DEFAULT_TAKE_PROFIT_RATIO` (default 2.0 = 1:2 RR) |
+| **Break-even stop** | At `BREAK_EVEN_ACTIVATION_PIPS` (default 5) profit → SL moves to entry + `BREAK_EVEN_BUFFER_PIPS` (default 1). Triggered once per trade |
+| **Partial take-profit** | At 1:1 RR (`PARTIAL_TP_RR_TARGET=1.0`) → closes `PARTIAL_TP_RATIO` (default 50%) of position. Remainder rides to full TP. Disable with `PARTIAL_TP_ENABLED=false` |
+| **Trailing stop** | Activates after `TRAILING_STOP_ACTIVATION_PIPS` (default 7) pips profit; trails `TRAILING_STOP_DISTANCE_PIPS` (default 3) pips behind peak. State persisted to `data/managed_trades.json` — survives restarts |
 | **Trade age alert** | Fires after 72 market hours open (weekends Fri 22:00–Sun 22:00 UTC excluded) |
 | **Exposure breach** | Total exposure >150% of `MAX_TOTAL_EXPOSURE` → emergency close all |
 | **Max drawdown** | Account down ≥20% from starting balance → emergency shutdown |
-| **Daily loss limit** | Day's loss ≥5% of balance → halt trading |
+| **Daily loss limit** | Day's loss ≥6% of balance → halt new trades for the day |
 | **Margin call** | Account balance ≤ 0 |
 | **Large unrealized loss** | Floating loss >15% of account → critical alert, positions flagged |
 | **Manual** | Telegram `/stop`, kill switch file, or `emergency_close_all()` |
+
+**Sequence per open trade each cycle:** break-even check → partial TP check → trailing stop check.
 
 Note: the weekend guard, holiday guard, and kill switch block **new** trades only. Existing open positions remain active and protected by broker-side SL/TP.
 
@@ -94,6 +112,8 @@ Note: the weekend guard, holiday guard, and kill switch block **new** trades onl
 
 Copy `.env.template` to `.env` and fill in all values before deployment.
 
+**Required:**
+
 | Variable | Description |
 |----------|-------------|
 | `OANDA_API_KEY` | OANDA personal access token |
@@ -101,16 +121,50 @@ Copy `.env.template` to `.env` and fill in all values before deployment.
 | `OANDA_ENVIRONMENT` | `practice` (paper) or `live` |
 | `GROQ_API_KEY` | Groq API key (primary LLM — analyst + reviewer) |
 | `ANTHROPIC_API_KEY` | Anthropic API key (fallback LLM — Claude Haiku) |
-| `ANTHROPIC_LLM_MODEL` | Anthropic model override (default: `claude-haiku-4-5-20251001`) |
-| `REVIEWER_LLM_MODEL` | Groq model for reviewer (default: `llama-3.1-8b-instant`) |
 | `TELEGRAM_BOT_TOKEN` | Telegram bot token from @BotFather |
 | `TELEGRAM_CHAT_ID` | Your Telegram chat ID |
-| `JB_NEWS_API_KEY` | JB News API key for economic calendar |
-| `EVENT_CACHE_TTL_HOURS` | How long to cache calendar data (default: `1`) |
-| `CONSENSUS_THRESHOLD` | Minimum analyst confidence to proceed to reviewer (default: `0.60`) |
-| `MAX_DAILY_LOSS_PERCENT` | Max daily drawdown before trading halts (e.g. `2.0`) |
-| `TRAILING_STOP_ACTIVATION_PIPS` | Pips in profit before trailing stop activates (default: `7.0`) |
-| `TRAILING_STOP_DISTANCE_PIPS` | Pips the stop trails behind the peak price (default: `3.0`) |
+| `ALERT_ENABLED` | `true` to enable Telegram alerts |
+| `JB_NEWS_API_KEY` | JB News API key for economic calendar and news headlines |
+
+**Recommended:**
+
+| Variable | Description |
+|----------|-------------|
+| `FRED_API_KEY` | Free key from fred.stlouisfed.org — enables auto-fetch of central bank rates (24h cache). Without this, rates are read from `CB_RATE_*` env vars below |
+
+**Central bank rates (only needed without FRED key, or to override FRED):**
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `CB_RATE_USD` | `4.50` | Fed Funds Rate |
+| `CB_RATE_EUR` | `2.40` | ECB Deposit Facility Rate |
+| `CB_RATE_GBP` | `4.50` | BOE Bank Rate |
+| `CB_RATE_JPY` | `0.50` | BOJ Policy Rate |
+| `CB_RATE_CHF` | `0.25` | SNB Policy Rate |
+| `CB_RATE_AUD` | `4.10` | RBA Cash Rate |
+
+**Optional overrides (defaults shown):**
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `CONSENSUS_THRESHOLD` | `0.60` | Minimum analyst confidence to proceed to reviewer |
+| `MAX_RISK_PER_TRADE` | `0.02` | Max risk per trade as fraction of balance (2%) |
+| `DEFAULT_TAKE_PROFIT_RATIO` | `2.0` | TP = SL distance × this ratio (1:2 RR) |
+| `MAX_DAILY_LOSS_PERCENT` | `0.06` | Daily loss limit before trading halts (6%) |
+| `TRAILING_STOP_ACTIVATION_PIPS` | `7.0` | Pips in profit before trailing stop activates |
+| `TRAILING_STOP_DISTANCE_PIPS` | `3.0` | Pips the stop trails behind the peak price |
+| `BREAK_EVEN_ACTIVATION_PIPS` | `5.0` | Pips in profit before SL moves to break-even |
+| `BREAK_EVEN_BUFFER_PIPS` | `1.0` | Buffer above entry when setting break-even SL |
+| `PARTIAL_TP_ENABLED` | `true` | Enable partial close at 1:1 RR |
+| `PARTIAL_TP_RATIO` | `0.5` | Fraction of position to close at partial TP (50%) |
+| `PARTIAL_TP_RR_TARGET` | `1.0` | RR multiple at which partial TP fires (1:1) |
+| `MAX_USD_CORRELATED_TRADES` | `2` | Max open trades in the same USD-directional bucket |
+| `PAPER_TRADING_MODE` | `true` | Set to `false` when going live |
+| `EXECUTION_INTERVAL_SECONDS` | `3600` | Cycle interval in seconds (1 hour) |
+| `CANDLE_COUNT` | `100` | H1 candles fetched per cycle per pair |
+| `ANTHROPIC_LLM_MODEL` | `claude-haiku-4-5-20251001` | Anthropic fallback model |
+| `REVIEWER_LLM_MODEL` | `llama-3.1-8b-instant` | Groq model for the reviewer agent |
+| `LOG_LEVEL` | `INFO` | Logging verbosity (`DEBUG`, `INFO`, `WARNING`) |
 
 ---
 

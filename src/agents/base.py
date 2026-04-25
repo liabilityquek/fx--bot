@@ -20,6 +20,7 @@ class AgentVote:
     signal: Signal
     confidence: float   # 0.0–1.0
     reasoning: str
+    setup_type: str = "NONE"
 
 
 class BaseAgent(ABC):

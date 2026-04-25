@@ -21,14 +21,122 @@ from config.settings import settings
 # Update manually after each major central bank meeting.
 # These change roughly once every 6-12 weeks.
 # ---------------------------------------------------------------------------
-CENTRAL_BANK_RATES = {
-    'USD': 4.50,   # Fed Funds Rate
-    'EUR': 2.40,   # ECB deposit rate
-    'GBP': 4.50,   # BOE bank rate
-    'JPY': 0.50,   # BOJ policy rate
-    'CHF': 0.25,   # SNB policy rate
-    'AUD': 4.10,   # RBA cash rate
+def _compute_usd_sentiment(pair_prices: dict) -> dict:
+    """Compute a simple USD sentiment score from recent close price changes.
+
+    Args:
+        pair_prices: dict of pair -> (prev_close, current_close)
+                     e.g. {'EUR_USD': (1.0850, 1.0820), ...}
+
+    Returns:
+        {'usd_score': float, 'usd_label': str}
+        usd_score: -1.0 (USD very weak) to +1.0 (USD very strong)
+        usd_label: 'USD_STRONG' | 'USD_WEAK' | 'NEUTRAL'
+    """
+    # Pairs where price UP = USD strong
+    usd_strong_when_up = {'USD_JPY', 'USD_CHF'}
+    # Pairs where price DOWN = USD strong
+    usd_strong_when_down = {'EUR_USD', 'GBP_USD', 'AUD_USD'}
+
+    votes = []
+    for pair, prices in pair_prices.items():
+        if not isinstance(prices, (list, tuple)) or len(prices) < 2:
+            continue
+        prev, curr = float(prices[0]), float(prices[1])
+        if prev == 0:
+            continue
+        change = (curr - prev) / prev
+        if pair in usd_strong_when_up:
+            votes.append(1.0 if change > 0 else -1.0)
+        elif pair in usd_strong_when_down:
+            votes.append(-1.0 if change > 0 else 1.0)
+
+    if not votes:
+        return {'usd_score': 0.0, 'usd_label': 'NEUTRAL'}
+
+    score = sum(votes) / len(votes)
+    if score >= 0.4:
+        label = 'USD_STRONG'
+    elif score <= -0.4:
+        label = 'USD_WEAK'
+    else:
+        label = 'NEUTRAL'
+
+    return {'usd_score': round(score, 2), 'usd_label': label}
+
+
+# ---------------------------------------------------------------------------
+# FRED API — central bank rate auto-fetch
+# Free key from https://fred.stlouisfed.org/docs/api/api_key.html
+# ---------------------------------------------------------------------------
+_FRED_BASE = 'https://api.stlouisfed.org/fred/series/observations'
+
+# FRED series IDs for each currency's benchmark rate
+_FRED_SERIES = {
+    'USD': 'FEDFUNDS',        # Fed Funds Effective Rate
+    'EUR': 'ECBDFR',          # ECB Deposit Facility Rate
+    'GBP': 'IRSTCI01GBM156N', # UK short-term rate (tracks BOE base rate)
+    'JPY': 'IRSTCI01JPM156N', # Japan short-term rate (tracks BOJ rate)
+    'CHF': 'IRSTCI01CHM156N', # Switzerland short-term rate (tracks SNB rate)
+    'AUD': 'IRSTCI01AUM156N', # Australia short-term rate (tracks RBA rate)
 }
+
+_CB_RATES_CACHE: dict = {}       # currency -> rate (float)
+_CB_RATES_CACHE_TS: float = 0.0  # unix timestamp of last successful fetch
+_CB_RATES_CACHE_TTL: float = 86400.0  # 24 hours — rates change at most every 6 weeks
+
+
+def _fetch_cb_rates_from_fred(api_key: str) -> dict:
+    """Fetch all 6 central bank rates from FRED. Returns partial dict on partial failure."""
+    result = {}
+    for currency, series_id in _FRED_SERIES.items():
+        try:
+            resp = requests.get(
+                _FRED_BASE,
+                params={
+                    'series_id': series_id,
+                    'api_key': api_key,
+                    'sort_order': 'desc',
+                    'limit': '1',
+                    'file_type': 'json',
+                },
+                timeout=8,
+            )
+            resp.raise_for_status()
+            obs = resp.json().get('observations', [])
+            if obs and obs[0].get('value') not in ('.', '', None):
+                result[currency] = round(float(obs[0]['value']), 4)
+        except Exception:
+            pass  # Missing currency falls back to settings value below
+    return result
+
+
+def _get_central_bank_rates() -> dict:
+    """Return central bank rates, auto-fetched from FRED when key is configured.
+
+    Priority:
+      1. FRED API (cached 24h) — auto-updates after each central bank meeting
+      2. Settings / .env values — manual fallback
+    """
+    global _CB_RATES_CACHE, _CB_RATES_CACHE_TS
+
+    api_key = settings.FRED_API_KEY
+    if api_key and (time.time() - _CB_RATES_CACHE_TS > _CB_RATES_CACHE_TTL):
+        fetched = _fetch_cb_rates_from_fred(api_key)
+        if fetched:
+            _CB_RATES_CACHE = fetched
+            _CB_RATES_CACHE_TS = time.time()
+
+    # Merge: FRED values override settings; settings fill any gaps
+    defaults = {
+        'USD': settings.CB_RATE_USD,
+        'EUR': settings.CB_RATE_EUR,
+        'GBP': settings.CB_RATE_GBP,
+        'JPY': settings.CB_RATE_JPY,
+        'CHF': settings.CB_RATE_CHF,
+        'AUD': settings.CB_RATE_AUD,
+    }
+    return {**defaults, **_CB_RATES_CACHE}
 
 # ---------------------------------------------------------------------------
 # JB News API
@@ -51,7 +159,7 @@ class MacroContext:
         self.logger = logger or logging.getLogger('macro_context')
         self._event_monitor = event_monitor
 
-    def build(self, pair: str) -> dict:
+    def build(self, pair: str, pair_prices: Optional[dict] = None) -> dict:
         """
         Build a complete macro context dict for the given pair.
 
@@ -70,6 +178,7 @@ class MacroContext:
             'carry_bias':        '',
             'recent_news':       '',
             'upcoming_events':   '',
+            'usd_sentiment':     {},
         }
 
         try:
@@ -87,6 +196,12 @@ class MacroContext:
         except Exception as exc:
             self.logger.debug(f'MacroContext: event fetch failed for {pair}: {exc}')
 
+        try:
+            if pair_prices:
+                result['usd_sentiment'] = _compute_usd_sentiment(pair_prices)
+        except Exception as exc:
+            self.logger.debug(f'MacroContext: USD sentiment failed: {exc}')
+
         return result
 
     # ------------------------------------------------------------------
@@ -95,8 +210,9 @@ class MacroContext:
 
     def _get_rate_differential(self, pair: str) -> dict:
         base, quote = pair.split('_')
-        base_rate  = CENTRAL_BANK_RATES.get(base)
-        quote_rate = CENTRAL_BANK_RATES.get(quote)
+        rates = _get_central_bank_rates()
+        base_rate  = rates.get(base)
+        quote_rate = rates.get(quote)
 
         if base_rate is None or quote_rate is None:
             return {}

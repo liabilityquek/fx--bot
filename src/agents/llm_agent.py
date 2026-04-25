@@ -33,8 +33,10 @@ _last_call_time: float = 0.0
 
 _SYSTEM_PROMPT = (
     "You are an FX trading signal agent. Respond with valid JSON only:\n"
-    '{"vote": "BUY|SELL|HOLD", "confidence": 0.0-1.0, "reasoning": "max 120 chars"}\n'
-    "Only vote BUY or SELL if confidence > 0.55, otherwise HOLD."
+    '{"vote": "BUY|SELL|HOLD", "confidence": 0.0-1.0, "reasoning": "max 120 chars", '
+    '"setup_type": "BREAKOUT|PULLBACK|REVERSAL|LIQUIDITY_SWEEP|RANGE|NONE"}\n'
+    "Only vote BUY or SELL if confidence > 0.55, otherwise HOLD.\n"
+    "setup_type must be NONE if vote is HOLD."
 )
 
 
@@ -135,6 +137,7 @@ class LLMAgent:
         price: float,
         indicators: dict,
         macro_context: Optional[dict] = None,
+        htf_candles: Optional[dict] = None,
     ) -> AgentVote:
         """Generate a synthesizer vote. Always returns an AgentVote — never raises."""
         if self.both_exhausted:
@@ -146,7 +149,7 @@ class LLMAgent:
                 reasoning="All LLM providers exhausted",
             )
         try:
-            return self._vote(pair, candles, price, indicators, macro_context)
+            return self._vote(pair, candles, price, indicators, macro_context, htf_candles)
         except Exception as exc:
             self.logger.warning(f"LLMAgent vote failed for {pair}: {exc}")
             return AgentVote(
@@ -168,6 +171,7 @@ class LLMAgent:
         price: float,
         indicators: dict,
         macro_context: Optional[dict] = None,
+        htf_candles: Optional[dict] = None,
     ) -> AgentVote:
         global _last_call_time
 
@@ -176,7 +180,7 @@ class LLMAgent:
         if elapsed < _MIN_CALL_SPACING_SECONDS:
             time.sleep(_MIN_CALL_SPACING_SECONDS - elapsed)
 
-        user_msg = _build_analyst_message(pair, candles, price, indicators, macro_context)
+        user_msg = _build_analyst_message(pair, candles, price, indicators, macro_context, htf_candles)
         _last_call_time = time.time()
 
         # Try Groq first
@@ -262,6 +266,7 @@ def _build_analyst_message(
     price: float,
     indicators: dict,
     macro_context: Optional[dict] = None,
+    htf_candles: Optional[dict] = None,
 ) -> str:
     """Construct the LLM analyst message with market context and indicator values."""
     recent = candles[-10:] if len(candles) >= 10 else candles
@@ -303,8 +308,43 @@ def _build_analyst_message(
             macro_lines.append(f"  Recent news:\n{macro_context['recent_news']}")
         if macro_context.get('upcoming_events'):
             macro_lines.append(f"  Upcoming events:\n{macro_context['upcoming_events']}")
+        if macro_context.get('usd_sentiment'):
+            usd = macro_context['usd_sentiment']
+            score = usd.get('usd_score', 0.0)
+            label = usd.get('usd_label', 'NEUTRAL')
+            caution = ''
+            if label == 'USD_STRONG':
+                caution = ' — caution on EUR/GBP/AUD longs'
+            elif label == 'USD_WEAK':
+                caution = ' — caution on USD/JPY/CHF longs'
+            macro_lines.append(
+                f"  USD sentiment: {label} ({score:+.2f}){caution}"
+            )
         if macro_lines:
             msg += "Macro context:\n" + "\n".join(macro_lines) + "\n\n"
+
+    if htf_candles:
+        htf_lines = ['Higher-timeframe bias:']
+        from .indicators import ema as _ema, adx as _adx, to_dataframe as _to_df
+        for tf_label, tf_clist in htf_candles.items():
+            if not tf_clist:
+                continue
+            try:
+                tf_df = _to_df(tf_clist)
+                tf_ema20 = _ema(tf_df, 20)
+                tf_ema50 = _ema(tf_df, 50)
+                tf_adx   = _adx(tf_df, 14)
+                if tf_ema20 is not None and tf_ema50 is not None:
+                    trend_str = 'bullish' if tf_ema20 > tf_ema50 else 'bearish'
+                    adx_str   = f' | ADX={tf_adx:.1f}' if tf_adx is not None else ''
+                    htf_lines.append(
+                        f'  {tf_label} trend: {trend_str}'
+                        f' | EMA20={tf_ema20:.5f} EMA50={tf_ema50:.5f}{adx_str}'
+                    )
+            except Exception:
+                pass
+        if len(htf_lines) > 1:
+            msg += '\n'.join(htf_lines) + '\n\n'
 
     msg += "Based on the above, provide your synthesized trading signal as JSON."
     return msg
@@ -344,10 +384,16 @@ def _parse_response(raw: str, pair: str) -> AgentVote:
 
     reasoning = str(data.get("reasoning", ""))[:120]
 
+    setup_type = str(data.get("setup_type", "NONE")).upper()
+    valid_setup_types = {"BREAKOUT", "PULLBACK", "REVERSAL", "LIQUIDITY_SWEEP", "RANGE", "NONE"}
+    if setup_type not in valid_setup_types:
+        setup_type = "NONE"
+
     return AgentVote(
         agent_name="LLMAgent",
         pair=pair,
         signal=signal,
         confidence=round(confidence, 4),
         reasoning=reasoning,
+        setup_type=setup_type,
     )

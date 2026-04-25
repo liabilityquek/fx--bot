@@ -224,6 +224,10 @@ class BaseBroker(ABC):
         """
         pass
     
+    def partial_close_trade(self, trade_id: str, units: int) -> bool:
+        """Close `units` of an open trade. Returns True on success."""
+        raise NotImplementedError
+
     def has_open_position(self, pair: str) -> bool:
         """
         Check if there's an open position for a pair.
