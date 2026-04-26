@@ -466,6 +466,57 @@ class OandaBroker(BaseBroker):
             self.logger.error(f"Error partial-closing {trade_id}: {e}")
             return False
 
+    def place_limit_order(
+        self,
+        pair: str,
+        side: OrderSide,
+        units: int,
+        price: float,
+        stop_loss: Optional[float] = None,
+        take_profit: Optional[float] = None,
+        client_order_id: Optional[str] = None,
+    ) -> Optional[str]:
+        """Place a GTC pending limit order. Returns order_id on success, None otherwise."""
+        try:
+            oanda_units = units if side == OrderSide.BUY else -units
+            order_spec: dict = {
+                "order": {
+                    "type": "LIMIT",
+                    "instrument": pair,
+                    "units": str(oanda_units),
+                    "price": _fmt_price(pair, price),
+                    "timeInForce": "GTC",
+                    "positionFill": "DEFAULT",
+                }
+            }
+            if stop_loss:
+                order_spec["order"]["stopLossOnFill"] = {"price": _fmt_price(pair, stop_loss)}
+            if take_profit:
+                order_spec["order"]["takeProfitOnFill"] = {"price": _fmt_price(pair, take_profit)}
+            if client_order_id:
+                order_spec["order"]["clientExtensions"] = {"id": client_order_id}
+
+            endpoint = orders.OrderCreate(accountID=self.account_id, data=order_spec)
+            response = self._with_retry(lambda: self.api.request(endpoint))
+
+            order_id = response.get("orderCreateTransaction", {}).get("id")
+            if order_id:
+                self.logger.info(
+                    f"Limit order placed: {pair} {side.value.upper()} {units} units "
+                    f"@ {price} | Order ID: {order_id}"
+                )
+                return order_id
+
+            self.logger.warning(f"Limit order placed but no order ID returned: {response}")
+            return None
+
+        except V20Error as e:
+            self.logger.error(f"OANDA API error placing limit order: {e}")
+            return None
+        except Exception as e:
+            self.logger.error(f"Error placing limit order: {e}")
+            return None
+
     def get_historical_candles(
         self,
         pair: str,

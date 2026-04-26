@@ -351,31 +351,63 @@ class OrderExecutor:
         self,
         request: OrderRequest
     ) -> ExecutionResult:
-        """
-        Execute a limit order.
-        
-        Note: OANDA's v20 API handles limit orders differently.
-        This is a placeholder for future implementation.
-        
-        Args:
-            request: Order request with limit_price
-        
-        Returns:
-            ExecutionResult
-        """
+        """Place a pending GTC limit order at the specified price."""
         if request.limit_price is None:
             return ExecutionResult(
                 success=False,
                 status=ExecutionStatus.FAILED,
                 error_message="Limit price required for limit orders"
             )
-        
-        # For now, execute as market order at current price
-        # TODO: Implement proper limit order support
-        self.logger.warning(
-            "Limit orders not fully implemented, executing as market order"
+
+        start_time = time.time()
+        self.logger.info(
+            f"Placing limit order: {request.side.value.upper()} "
+            f"{request.units:,} {request.pair} @ {request.limit_price}"
         )
-        return self.execute_market_order(request)
+
+        try:
+            order_id = self.broker.place_limit_order(
+                pair=request.pair,
+                side=request.side,
+                units=request.units,
+                price=request.limit_price,
+                stop_loss=request.stop_loss,
+                take_profit=request.take_profit,
+            )
+        except Exception as e:
+            return ExecutionResult(
+                success=False,
+                status=ExecutionStatus.FAILED,
+                error_message=str(e),
+                execution_time_ms=(time.time() - start_time) * 1000,
+            )
+
+        execution_time = (time.time() - start_time) * 1000
+
+        if order_id:
+            self._record_order_attempt(True)
+            result = ExecutionResult(
+                success=True,
+                trade_id=order_id,
+                status=ExecutionStatus.PENDING,
+                execution_time_ms=execution_time,
+            )
+            self.execution_history.append(result)
+            self.logger.info(
+                f"Limit order accepted: {request.pair} | Order ID: {order_id} | "
+                f"Time: {execution_time:.0f}ms"
+            )
+            return result
+
+        self._record_order_attempt(False)
+        result = ExecutionResult(
+            success=False,
+            status=ExecutionStatus.FAILED,
+            error_message="Broker rejected limit order (no order ID returned)",
+            execution_time_ms=execution_time,
+        )
+        self.execution_history.append(result)
+        return result
     
     def execute(self, request: OrderRequest) -> ExecutionResult:
         """

@@ -228,6 +228,19 @@ class BaseBroker(ABC):
         """Close `units` of an open trade. Returns True on success."""
         raise NotImplementedError
 
+    def place_limit_order(
+        self,
+        pair: str,
+        side: OrderSide,
+        units: int,
+        price: float,
+        stop_loss: Optional[float] = None,
+        take_profit: Optional[float] = None,
+        client_order_id: Optional[str] = None,
+    ) -> Optional[str]:
+        """Place a GTC pending limit order. Returns order_id on success, None otherwise."""
+        raise NotImplementedError
+
     def has_open_position(self, pair: str) -> bool:
         """
         Check if there's an open position for a pair.
