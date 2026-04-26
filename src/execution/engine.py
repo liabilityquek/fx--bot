@@ -412,7 +412,7 @@ class TradingEngine:
 
         # SL/TP via ATR
         entry_price = price_info['ask'] if is_long else price_info['bid']
-        sl_pips, stop_loss, take_profit = self._calc_sl_tp(
+        sl_pips, stop_loss, take_profit, atr_val = self._calc_sl_tp(
             pair, candles, entry_price, is_long
         )
         sl_pips_int = max(1, int(sl_pips))
@@ -498,6 +498,8 @@ class TradingEngine:
                     trailing_stop=True,
                     trailing_distance=self.trade_manager.trailing_stop_distance_pips,
                 )
+                if atr_val and atr_val > 0:
+                    self.trade_manager.update_trade_atr(placed_trade.trade_id, atr_val)
 
             self._send_vote_alert(
                 pair, result, filled_price, stop_loss, take_profit, units
@@ -577,15 +579,18 @@ class TradingEngine:
         entry_price: float,
         is_long: bool,
     ):
-        """Return (sl_pips, stop_loss_price, take_profit_price)."""
+        """Return (sl_pips, stop_loss_price, take_profit_price, atr_val)."""
         from config.pairs import PAIR_INFO
 
         pip_value = PAIR_INFO.get(pair, {}).get('pip_value', 0.0001)
         atr_val = _calc_atr(candles)
 
         if atr_val and atr_val > 0:
-            sl_distance = atr_val * 2.0
+            multiplier = _get_atr_multiplier(atr_val, candles)
+            self.logger.info(f"{pair} ATR multiplier: {multiplier}x (ATR={atr_val:.5f})")
+            sl_distance = atr_val * multiplier
         else:
+            multiplier = 2.0
             sl_distance = settings.DEFAULT_STOP_LOSS_PIPS * pip_value
 
         tp_distance = sl_distance * settings.DEFAULT_TAKE_PROFIT_RATIO
@@ -598,7 +603,7 @@ class TradingEngine:
             take_profit = entry_price - tp_distance
 
         sl_pips = sl_distance / pip_value
-        return sl_pips, stop_loss, take_profit
+        return sl_pips, stop_loss, take_profit, atr_val
 
     # ------------------------------------------------------------------
     # Alerts
@@ -677,3 +682,33 @@ def _calc_atr(candles: List[Dict], period: int = 14) -> Optional[float]:
     ], axis=1).max(axis=1)
     val = tr.rolling(window=period).mean().iloc[-1]
     return float(val) if pd.notna(val) else None
+
+
+def _get_atr_multiplier(atr_val: float, candles: List[Dict], atr_period: int = 14, avg_period: int = 50) -> float:
+    """Return adaptive ATR multiplier (1.5/2.0/3.0) based on current vs historical ATR."""
+    if not candles or len(candles) < atr_period + avg_period + 1:
+        return 2.0
+    df = pd.DataFrame([
+        {
+            'high':  float(c.get('high', 0)),
+            'low':   float(c.get('low', 0)),
+            'close': float(c.get('close', 0)),
+        }
+        for c in candles
+    ])
+    prev_close = df['close'].shift(1)
+    tr = pd.concat([
+        df['high'] - df['low'],
+        (df['high'] - prev_close).abs(),
+        (df['low'] - prev_close).abs(),
+    ], axis=1).max(axis=1)
+    atr_series = tr.rolling(window=atr_period).mean()
+    atr_avg = atr_series.iloc[-avg_period:].mean()
+    if pd.isna(atr_avg) or atr_avg == 0:
+        return 2.0
+    ratio = atr_val / atr_avg
+    if ratio > 1.5:
+        return 3.0
+    if ratio < 0.8:
+        return 1.5
+    return 2.0

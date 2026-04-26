@@ -193,10 +193,15 @@ Example with a $10,000 account:
 
   2% of $10,000 = $200 maximum acceptable loss
 
-  The bot sets a safety exit point 50 price units away from the entry.
+  The bot measures recent market volatility (ATR) and compares it
+  to the last 50 bars of history to pick a safety exit distance:
+    - Quiet market  → tighter exit (1.5 × ATR)
+    - Normal market → standard exit (2.0 × ATR)
+    - Volatile market → wider exit (3.0 × ATR)
+
   It calculates exactly how many units to buy so that:
 
-    If the price moves 50 units against you → you lose exactly $200.
+    If the price hits the safety exit → you lose exactly $200.
     Nothing more.
 
   That is the position size.
@@ -253,7 +258,7 @@ Once profit equals the original risk (e.g. if you risked 100 pips, once you're +
 
 **3. Trailing protection (at +7 pips profit)**
 
-Once a trade is 7 pips in profit, the bot automatically moves the safety exit to follow the price — always staying 3 pips behind the best price reached. If the price reverses, the trade closes automatically with a profit.
+Once a trade is 7 pips in profit, the bot automatically moves the safety exit to follow the price — always staying ATR × 1.5 in price behind the best price reached (ATR is measured and stored when the trade opens). This means the trailing distance widens automatically in volatile markets and tightens in calm ones. If the price reverses, the trade closes automatically with a profit.
 
 All three thresholds are configurable in `.env`. The full trade state is saved to disk — if the bot restarts, it picks up exactly where it left off.
 
@@ -273,7 +278,7 @@ Example — SELL trade at 1.0948 with 100 pip SL:
   Remaining 50% rides toward 1.0748.
 
   Price drops to 1.0920  (+28 pips, trailing active):
-  Safety exit moves to ─────────────► 1.0923  (3 pips behind peak)
+  Safety exit moves to ─────────────► 1.0920 + (ATR × 1.5)  (ATR-based distance behind peak)
 
   Price reverses and hits 1.0923:
   Remaining position closes automatically. Profit locked in.
@@ -485,12 +490,12 @@ The bot connects to several external services:
 | 1:05 PM | AI Analyst says: **SELL Euro/Dollar. Confidence: 68%. Setup: PULLBACK.** |
 | 1:06 PM | 68% > 60% threshold. Signal is SELL. Proceeds to reviewer. |
 | 1:07 PM | AI Reviewer checks: calendar clear, reasoning consistent with data. **APPROVED.** |
-| 1:08 PM | Bot calculates: 2% of $10k = $200 max loss. ATR-based SL = 52 pips. Size = 38,000 units. |
+| 1:08 PM | Bot calculates: 2% of $10k = $200 max loss. ATR is normal vs recent history → 2× multiplier → SL = 52 pips. Size = 38,000 units. |
 | 1:09 PM | Trade placed: SELL 38,000 units at 1.0948. Safety exit at 1.1000. Profit exit at 1.0844 (1:2 RR). |
 | 1:10 PM | Telegram: "SELL Euro/Dollar opened. Setup: PULLBACK. Size: 0.38 lots." |
 | 2:00 PM | Price at 1.0943. +5 pips profit. **Break-even activates** — safety exit moves to 1.0947. |
 | 3:00 PM | Price at 1.0896. +52 pips profit (1:1 RR). **Partial TP fires** — 50% closed. $104 profit locked in. |
-| 4:00 PM | Price at 1.0875. Trailing stop 3 pips behind peak. Safety exit at 1.0878. |
+| 4:00 PM | Price at 1.0875. Trailing stop ATR × 1.5 behind peak. Safety exit follows dynamically. |
 | 4:30 PM | Price reaches 1.0844 — full profit exit. Remaining 50% closes automatically. |
 | 4:31 PM | Telegram: "Trade closed at target. Total profit: +$212. Account: $10,212." |
 
@@ -506,7 +511,7 @@ Its core design principles are:
 2. **Always have an exit** — Safety exit is placed at the broker the moment a trade opens
 3. **Two AIs must agree** — One to find the opportunity, one to sanity-check it
 4. **Avoid danger zones** — No new trades around major announcements, and no piling into the same USD direction
-5. **Protect profits in stages** — Break-even at +5 pips, partial close at 1:1, trailing stop from +7 pips
+5. **Protect profits in stages** — Break-even at +5 pips, partial close at 1:1, ATR-adaptive trailing stop from +7 pips
 6. **Know when to stop** — Multiple automatic shutdown triggers if things go wrong
 7. **Keep you informed** — Every significant event triggers a Telegram message
 

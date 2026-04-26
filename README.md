@@ -89,11 +89,11 @@ Trades are closed under the following conditions:
 
 | Trigger | Detail |
 |---------|--------|
-| **Stop Loss** | Broker-side order. SL distance = 2× ATR; fallback to `DEFAULT_STOP_LOSS_PIPS` if ATR unavailable |
+| **Stop Loss** | Broker-side order. SL distance = adaptive ATR multiplier × ATR. Multiplier is 1.5× (quiet market), 2.0× (normal), or 3.0× (high volatility) — chosen by comparing current ATR against the 50-bar ATR average. Fallback to `DEFAULT_STOP_LOSS_PIPS` if ATR unavailable |
 | **Take Profit** | Broker-side order. TP = `SL distance × DEFAULT_TAKE_PROFIT_RATIO` (default 2.0 = 1:2 RR) |
 | **Break-even stop** | At `BREAK_EVEN_ACTIVATION_PIPS` (default 5) profit → SL moves to entry + `BREAK_EVEN_BUFFER_PIPS` (default 1). Triggered once per trade |
 | **Partial take-profit** | At 1:1 RR (`PARTIAL_TP_RR_TARGET=1.0`) → closes `PARTIAL_TP_RATIO` (default 50%) of position. Remainder rides to full TP. Disable with `PARTIAL_TP_ENABLED=false` |
-| **Trailing stop** | Activates after `TRAILING_STOP_ACTIVATION_PIPS` (default 7) pips profit; trails `TRAILING_STOP_DISTANCE_PIPS` (default 3) pips behind peak. State persisted to `data/managed_trades.json` — survives restarts |
+| **Trailing stop** | Activates after `TRAILING_STOP_ACTIVATION_PIPS` (default 7) pips profit; trails ATR × 1.5 in price behind the peak (ATR stored at trade entry). Falls back to `TRAILING_STOP_DISTANCE_PIPS` × pip size if ATR unavailable. State persisted to `data/managed_trades.json` — survives restarts |
 | **Trade age alert** | Fires after 72 market hours open (weekends Fri 22:00–Sun 22:00 UTC excluded) |
 | **Exposure breach** | Total exposure >150% of `MAX_TOTAL_EXPOSURE` → emergency close all |
 | **Max drawdown** | Account down ≥20% from starting balance → emergency shutdown |

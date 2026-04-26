@@ -108,6 +108,24 @@ class StopLossTakeProfitCalculator:
         
         return result
     
+    def _get_adaptive_multiplier(self, atr_value: float, data: pd.DataFrame, period: int = 50) -> float:
+        """Return 1.5/2.0/3.0 based on current ATR vs rolling average."""
+        if len(data) < period + 15:
+            return 2.0
+        high, low, close = data['high'], data['low'], data['close']
+        prev_close = close.shift(1)
+        tr = pd.concat([high - low, (high - prev_close).abs(), (low - prev_close).abs()], axis=1).max(axis=1)
+        atr_series = tr.rolling(window=14).mean()
+        atr_avg = atr_series.iloc[-period:].mean()
+        if pd.isna(atr_avg) or atr_avg == 0:
+            return 2.0
+        ratio = atr_value / atr_avg
+        if ratio > 1.5:
+            return 3.0
+        if ratio < 0.8:
+            return 1.5
+        return 2.0
+
     def calculate_atr_based(
         self,
         pair: str,
@@ -115,7 +133,8 @@ class StopLossTakeProfitCalculator:
         is_long: bool,
         historical_data: pd.DataFrame,
         atr_multiplier: float = 2.0,
-        risk_reward_ratio: Optional[float] = None
+        risk_reward_ratio: Optional[float] = None,
+        adaptive: bool = False,
     ) -> StopLossTakeProfitLevels:
         """
         Calculate SL/TP using ATR (Average True Range).
@@ -150,6 +169,8 @@ class StopLossTakeProfitCalculator:
         pip_value = pair_info['pip_value']
         
         # Stop loss distance in price
+        if adaptive:
+            atr_multiplier = self._get_adaptive_multiplier(atr, historical_data)
         sl_distance = atr * atr_multiplier
         
         # Calculate levels

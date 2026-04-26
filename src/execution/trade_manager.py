@@ -75,6 +75,7 @@ class ManagedTrade:
     partial_closes: List[Dict] = field(default_factory=list)
     break_even_triggered: bool = False
     partial_tp_triggered: bool = False
+    atr_value: Optional[float] = None  # Last known ATR for dynamic trailing stop
 
     @property
     def age_hours(self) -> float:
@@ -177,7 +178,12 @@ class TradeManager:
             del self.managed_trades[trade_id]
             self.logger.info(f"Unregistered trade {trade_id}")
             self._save_state()
-    
+
+    def update_trade_atr(self, trade_id: str, atr_value: float) -> None:
+        """Update the stored ATR for a managed trade's trailing stop calculation."""
+        if trade_id in self.managed_trades:
+            self.managed_trades[trade_id].atr_value = atr_value
+
     def sync_trades(self) -> Dict[str, str]:
         """
         Synchronize managed trades with broker.
@@ -216,6 +222,7 @@ class TradeManager:
                     managed.lowest_price = persisted.get("lowest_price", trade.entry_price)
                     managed.break_even_triggered = persisted.get("break_even_triggered", False)
                     managed.partial_tp_triggered = persisted.get("partial_tp_triggered", False)
+                    managed.atr_value = persisted.get("atr_value", None)
                     self.logger.info(f"Restored persisted state for trade {trade_id}")
                 result[trade_id] = "added"
         
@@ -291,15 +298,21 @@ class TradeManager:
         # Determine pip size
         pip_size = 0.01 if 'JPY' in trade.pair else 0.0001
         
+        # Determine trailing distance: ATR-based if available, else fixed pips
+        if managed.atr_value and managed.atr_value > 0:
+            trail_distance = managed.atr_value * 1.5  # ATR-based distance in price
+        else:
+            trail_distance = managed.trailing_stop_distance * pip_size  # fallback to fixed pips
+
         # Calculate current profit in pips
         if trade.is_long:
             profit_pips = (trade.current_price - trade.entry_price) / pip_size
             # For long: trail below highest price
-            new_sl = managed.highest_price - (managed.trailing_stop_distance * pip_size)
+            new_sl = managed.highest_price - trail_distance
         else:
             profit_pips = (trade.entry_price - trade.current_price) / pip_size
             # For short: trail above lowest price
-            new_sl = managed.lowest_price + (managed.trailing_stop_distance * pip_size)
+            new_sl = managed.lowest_price + trail_distance
         
         # Only activate trailing stop after minimum profit
         if profit_pips < self.trailing_stop_activation_pips:
@@ -563,6 +576,7 @@ class TradeManager:
                     "initial_tp": managed.initial_tp,
                     "break_even_triggered": managed.break_even_triggered,
                     "partial_tp_triggered": managed.partial_tp_triggered,
+                    "atr_value": managed.atr_value,
                 }
             self._state_file.parent.mkdir(parents=True, exist_ok=True)
             self._state_file.write_text(json.dumps(data, indent=2))
