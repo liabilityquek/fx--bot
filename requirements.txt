@@ -10,3 +10,4 @@ python-dotenv==1.2.1
 pytz==2023.3
 requests==2.32.3
 schedule==1.2.2
+supabase>=2.0.0
