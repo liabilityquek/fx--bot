@@ -139,17 +139,29 @@ class AlertManager:
         self,
         pair: str,
         pnl: float,
-        reason: str
+        reason: str = "Unknown",
+        close_price: float = 0.0,
+        entry_price: float = 0.0,
+        stop_loss: Optional[float] = None,
+        take_profit: Optional[float] = None,
+        pips: float = 0.0,
     ):
         """Send alert for closed trade."""
         emoji = "✅" if pnl >= 0 else "❌"
-        outcome = "Profit" if pnl >= 0 else "Loss"
+        pnl_str = f"+${pnl:.2f}" if pnl >= 0 else f"-${abs(pnl):.2f}"
+        pips_str = f"+{pips:.1f}" if pips >= 0 else f"{pips:.1f}"
+        sl_str = f"`{stop_loss:.5f}`" if stop_loss else "—"
+        tp_str = f"`{take_profit:.5f}`" if take_profit else "—"
 
         message = (
             f"{emoji} *Trade Closed*\n\n"
             f"*Pair:* `{pair}`\n"
-            f"*Outcome:* {outcome}\n"
-            f"*Reason:* {reason}"
+            f"*Reason:* {reason}\n\n"
+            f"*Entry:* `{entry_price:.5f}`\n"
+            f"*Close:* `{close_price:.5f}` ({pips_str} pips)\n"
+            f"*SL:* {sl_str}\n"
+            f"*TP:* {tp_str}\n\n"
+            f"*P/L:* {pnl_str}"
         )
         priority = 'INFO' if pnl >= 0 else 'WARNING'
         self.send_alert(message, priority)

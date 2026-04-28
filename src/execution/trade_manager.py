@@ -15,7 +15,7 @@ from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 from enum import Enum
 
-from src.broker.base import BaseBroker, Trade, Position, OrderSide
+from src.broker.base import BaseBroker, Trade, Position, OrderSide, TradeCloseResult
 from src.monitoring.logger import get_logger
 from src.monitoring.alerts import AlertManager
 from config.settings import settings
@@ -76,6 +76,11 @@ class ManagedTrade:
     break_even_triggered: bool = False
     partial_tp_triggered: bool = False
     atr_value: Optional[float] = None  # Last known ATR for dynamic trailing stop
+    confidence: float = 0.0
+    entry_reason: str = ""
+    setup_type: str = "NONE"
+    reviewer_verdict: str = ""
+    reviewer_reason: str = ""
 
     @property
     def age_hours(self) -> float:
@@ -102,7 +107,8 @@ class TradeManager:
         self,
         broker: BaseBroker,
         logger: Optional[logging.Logger] = None,
-        alert_manager: Optional[AlertManager] = None
+        alert_manager: Optional[AlertManager] = None,
+        supabase_logger=None,
     ):
         """
         Initialize trade manager.
@@ -115,6 +121,16 @@ class TradeManager:
         self.broker = broker
         self.logger = logger or get_logger('trade_manager')
         self.alert_manager = alert_manager
+
+        if supabase_logger is not None:
+            self.supabase_logger = supabase_logger
+        else:
+            # Auto-create if env vars are configured; silently stay None if not
+            try:
+                from src.monitoring.supabase_logger import create_supabase_logger
+                self.supabase_logger = create_supabase_logger()
+            except Exception:
+                self.supabase_logger = None
         
         # Managed trades tracking
         self.managed_trades: Dict[str, ManagedTrade] = {}
@@ -137,7 +153,12 @@ class TradeManager:
         trade: Trade,
         strategy_name: str = "",
         trailing_stop: bool = False,
-        trailing_distance: float = 0.0
+        trailing_distance: float = 0.0,
+        confidence: float = 0.0,
+        entry_reason: str = "",
+        setup_type: str = "NONE",
+        reviewer_verdict: str = "",
+        reviewer_reason: str = "",
     ) -> ManagedTrade:
         """
         Register a new trade for management.
@@ -160,7 +181,12 @@ class TradeManager:
             trailing_stop_active=trailing_stop,
             trailing_stop_distance=trailing_distance or self.trailing_stop_distance_pips,
             highest_price=trade.entry_price,
-            lowest_price=trade.entry_price
+            lowest_price=trade.entry_price,
+            confidence=confidence,
+            entry_reason=entry_reason[:120] if entry_reason else "",
+            setup_type=setup_type,
+            reviewer_verdict=reviewer_verdict,
+            reviewer_reason=reviewer_reason,
         )
         
         self.managed_trades[trade.trade_id] = managed
@@ -441,47 +467,122 @@ class TradeManager:
     ) -> TradeManagementResult:
         """
         Close a specific trade.
-        
+
         Args:
             trade_id: Trade ID to close
             reason: Reason for closure
-        
+
         Returns:
             TradeManagementResult
         """
+        from datetime import timezone as _tz
+
         managed = self.managed_trades.get(trade_id)
-        
+
         if not managed:
             self.logger.warning(f"Trade {trade_id} not in managed trades")
-        
-        success = self.broker.close_trade(trade_id)
-        
-        if success:
-            pnl = managed.trade.unrealized_pnl if managed else 0.0
-            
-            self.logger.info(
-                f"✅ Trade {trade_id} closed | Reason: {reason} | "
-                f"P/L: ${pnl:.2f}"
-            )
-            
-            if self.alert_manager and managed:
-                self.alert_manager.alert_trade_closed(
-                    pair=managed.trade.pair,
-                    pnl=pnl,
-                    reason=reason
+
+        result = self.broker.close_trade(trade_id)
+
+        if result:
+            realized_pnl = result.realized_pnl
+            close_price = result.close_price
+
+            # Normalise raw reason to display label
+            if reason in ('sl', 'stop_loss'):
+                reason_label = 'Stop Loss Hit'
+                raw_reason = 'stop_loss'
+            elif reason in ('tp', 'take_profit'):
+                reason_label = 'Take Profit Hit'
+                raw_reason = 'take_profit'
+            elif reason in ('news',):
+                reason_label = 'News Close'
+                raw_reason = 'news'
+            elif reason in ('emergency',):
+                reason_label = 'Emergency Close'
+                raw_reason = 'emergency'
+            else:
+                reason_label = 'Closed by User'
+                raw_reason = 'user'
+
+            if managed:
+                pip_size = 0.01 if 'JPY' in managed.trade.pair else 0.0001
+                entry = managed.trade.entry_price
+                pips = (close_price - entry) / pip_size
+                if not managed.trade.is_long:
+                    pips = -pips
+
+                sl = managed.trade.stop_loss
+                tp = managed.trade.take_profit
+                sl_pips = abs(entry - sl) / pip_size if sl else 0.0
+                tp_pips = abs(entry - tp) / pip_size if tp else 0.0
+                r_multiple = round(pips / sl_pips, 2) if sl_pips else None
+
+                self.logger.info(
+                    f"Trade closed: {trade_id} | {managed.trade.pair} "
+                    f"{managed.trade.side.value.upper()} | "
+                    f"Entry: {entry:.5f} | "
+                    f"SL: {sl:.5f} (-{sl_pips:.1f} pips) | "
+                    f"TP: {tp:.5f} (+{tp_pips:.1f} pips) | "
+                    f"Close: {close_price:.5f} ({pips:+.1f} pips) | "
+                    f"P/L: ${realized_pnl:+.2f} | {reason_label}"
                 )
-            
+
+                if self.alert_manager:
+                    self.alert_manager.alert_trade_closed(
+                        pair=managed.trade.pair,
+                        pnl=realized_pnl,
+                        close_price=close_price,
+                        entry_price=entry,
+                        stop_loss=sl,
+                        take_profit=tp,
+                        pips=pips,
+                        reason=reason_label,
+                    )
+
+                if self.supabase_logger:
+                    self.supabase_logger.log_closed_trade({
+                        'trade_id': trade_id,
+                        'pair': managed.trade.pair,
+                        'side': managed.trade.side.value.upper(),
+                        'units': managed.trade.units,
+                        'entry_price': entry,
+                        'close_price': close_price,
+                        'stop_loss': sl,
+                        'take_profit': tp,
+                        'sl_pips': round(sl_pips, 1),
+                        'tp_pips': round(tp_pips, 1),
+                        'pips_gained': round(pips, 1),
+                        'realized_pnl': round(realized_pnl, 2),
+                        'close_reason': raw_reason,
+                        'entry_reason': managed.entry_reason,
+                        'confidence': managed.confidence,
+                        'setup_type': managed.setup_type,
+                        'reviewer_verdict': managed.reviewer_verdict,
+                        'reviewer_reason': managed.reviewer_reason,
+                        'strategy_name': managed.strategy_name,
+                        'atr_value': managed.atr_value,
+                        'r_multiple': r_multiple,
+                        'open_time': managed.entry_time.isoformat() if managed.entry_time else None,
+                        'close_time': datetime.now(_tz.utc).isoformat(),
+                    })
+            else:
+                self.logger.info(
+                    f"Trade closed: {trade_id} | "
+                    f"Close: {close_price:.5f} | P/L: ${realized_pnl:+.2f} | {reason_label}"
+                )
+
             self.unregister_trade(trade_id)
-            
+
             return TradeManagementResult(
                 trade_id=trade_id,
                 action=TradeAction.CLOSE,
                 success=True,
-                details=f"Closed: {reason}",
-                pnl=pnl
+                details=f"Closed: {reason_label}",
+                pnl=realized_pnl,
             )
         else:
-            self.logger.error(f"❌ Failed to close trade {trade_id}")
+            self.logger.error(f"Failed to close trade {trade_id}")
             return TradeManagementResult(
                 trade_id=trade_id,
                 action=TradeAction.CLOSE,

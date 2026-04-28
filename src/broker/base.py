@@ -7,6 +7,17 @@ from typing import List, Optional, Dict
 from enum import Enum
 
 
+@dataclass
+class TradeCloseResult:
+    """Result of a broker close_trade() call."""
+    success: bool
+    realized_pnl: float = 0.0
+    close_price: float = 0.0
+
+    def __bool__(self) -> bool:
+        return self.success
+
+
 class OrderSide(Enum):
     """Order side enumeration."""
     BUY = "buy"
@@ -178,15 +189,26 @@ class BaseBroker(ABC):
         pass
     
     @abstractmethod
-    def close_trade(self, trade_id: str) -> bool:
+    def close_trade(self, trade_id: str) -> 'TradeCloseResult':
         """
         Close a specific trade.
-        
+
         Args:
             trade_id: Trade ID to close
-        
+
         Returns:
-            True if closed successfully, False otherwise
+            TradeCloseResult with success flag, realized P&L, and close price
+        """
+        pass
+
+    @abstractmethod
+    def get_closed_trade_info(self, trade_id: str) -> dict:
+        """
+        Fetch close details for a broker-auto-closed trade (SL/TP hit).
+
+        Returns dict with keys: close_price (float), realized_pnl (float),
+        reason (str: 'stop_loss' | 'take_profit' | 'user').
+        Returns empty dict on failure — callers must handle gracefully.
         """
         pass
     

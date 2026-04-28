@@ -324,7 +324,7 @@ def _build_analyst_message(
             msg += "Macro context:\n" + "\n".join(macro_lines) + "\n\n"
 
     if htf_candles:
-        htf_lines = ['Higher-timeframe bias:']
+        htf_lines = ['Multi-timeframe context:']
         from .indicators import ema as _ema, adx as _adx, to_dataframe as _to_df
         for tf_label, tf_clist in htf_candles.items():
             if not tf_clist:

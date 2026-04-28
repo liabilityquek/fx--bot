@@ -18,7 +18,7 @@ from config.settings import settings
 from config.pairs import PAIR_INFO
 from .base import (
     BaseBroker, Trade, Position, AccountInfo,
-    OrderSide, OrderStatus
+    OrderSide, OrderStatus, TradeCloseResult
 )
 
 
@@ -332,28 +332,63 @@ class OandaBroker(BaseBroker):
             self.logger.error(f"Error placing order: {e}")
             return None
     
-    def close_trade(self, trade_id: str) -> bool:
-        """Close a specific trade."""
+    def close_trade(self, trade_id: str) -> TradeCloseResult:
+        """Close a specific trade and return realized P&L + close price."""
         try:
             endpoint = trades.TradeClose(
                 accountID=self.account_id,
                 tradeID=trade_id
             )
             response = self.api.request(endpoint)
-            
+
             if 'orderFillTransaction' in response:
-                pnl = float(response['orderFillTransaction'].get('pl', 0))
-                self.logger.info(f"✅ Trade {trade_id} closed | P/L: ${pnl:.2f}")
-                return True
-            
-            return False
-            
+                fill = response['orderFillTransaction']
+                realized_pnl = float(fill.get('pl', 0))
+                close_price = float(fill.get('price', 0))
+                self.logger.info(
+                    f"Trade {trade_id} closed | Close: {close_price} | P/L: ${realized_pnl:+.2f}"
+                )
+                return TradeCloseResult(success=True, realized_pnl=realized_pnl, close_price=close_price)
+
+            return TradeCloseResult(success=False)
+
         except V20Error as e:
             self.logger.error(f"OANDA API error closing trade {trade_id}: {e}")
-            return False
+            return TradeCloseResult(success=False)
         except Exception as e:
             self.logger.error(f"Error closing trade {trade_id}: {e}")
-            return False
+            return TradeCloseResult(success=False)
+
+    def get_closed_trade_info(self, trade_id: str) -> dict:
+        """Fetch close details for a broker-auto-closed trade (SL/TP hit)."""
+        try:
+            ep = trades.TradeDetails(accountID=self.account_id, tradeID=trade_id)
+            response = self.api.request(ep)
+            trade_data = response.get('trade', {})
+
+            close_price = float(trade_data.get('averageClosePrice', 0))
+            realized_pnl = float(trade_data.get('realizedPL', 0))
+
+            sl_price = float((trade_data.get('stopLossOrder') or {}).get('price', 0))
+            tp_price = float((trade_data.get('takeProfitOrder') or {}).get('price', 0))
+            instrument = trade_data.get('instrument', '')
+            pip_size = 0.01 if 'JPY' in instrument else 0.0001
+
+            if sl_price and abs(close_price - sl_price) <= pip_size * 2:
+                reason = 'stop_loss'
+            elif tp_price and abs(close_price - tp_price) <= pip_size * 2:
+                reason = 'take_profit'
+            else:
+                reason = 'user'
+
+            return {'close_price': close_price, 'realized_pnl': realized_pnl, 'reason': reason}
+
+        except V20Error as e:
+            self.logger.warning(f"Could not fetch closed trade info for {trade_id}: {e}")
+            return {}
+        except Exception as e:
+            self.logger.warning(f"Error fetching closed trade info for {trade_id}: {e}")
+            return {}
     
     def close_position(self, pair: str) -> bool:
         """Close entire position for a pair."""

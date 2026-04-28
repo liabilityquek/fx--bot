@@ -355,6 +355,14 @@ class TradingEngine:
                 htf_candles['H4'] = h4
         except Exception:
             pass
+        m15_candles: list = []
+        try:
+            m15 = self.broker.get_historical_candles(pair, granularity='M15', count=10) or []
+            if m15:
+                htf_candles['M15'] = m15
+                m15_candles = m15
+        except Exception:
+            pass
 
         # Run decision pipeline
         result: DecisionResult = self.decision_engine.run_decision(pair, candles, price, pair_prices=self._cycle_pair_prices, htf_candles=htf_candles)
@@ -407,6 +415,14 @@ class TradingEngine:
         if new_is_usd_long and open_usd_long >= max_corr:
             self.logger.info(
                 f"{pair}: USD overexposure blocked — {open_usd_long} USD-long positions already open (max {max_corr})"
+            )
+            return
+
+        # M15 momentum gate — block if short-term momentum contradicts signal
+        if m15_candles and not _m15_momentum_aligned(m15_candles, is_long):
+            self.logger.info(
+                f"{pair}: M15 momentum gate blocked — "
+                f"{'BUY' if is_long else 'SELL'} signal conflicts with M15 short-term direction"
             )
             return
 
@@ -497,6 +513,11 @@ class TradingEngine:
                     strategy_name=f"{result.final_signal.value.lower()}_signal",
                     trailing_stop=True,
                     trailing_distance=self.trade_manager.trailing_stop_distance_pips,
+                    confidence=result.confidence,
+                    entry_reason=result.llm_reasoning,
+                    setup_type=result.setup_type,
+                    reviewer_verdict=result.reviewer_verdict,
+                    reviewer_reason=result.reviewer_reason,
                 )
                 if atr_val and atr_val > 0:
                     self.trade_manager.update_trade_atr(placed_trade.trade_id, atr_val)
@@ -520,14 +541,75 @@ class TradingEngine:
 
         for trade_id, trade in snapshot.items():
             if trade_id not in current_ids:
+                # Fetch real close details from OANDA (SL / TP / user)
+                info = self.broker.get_closed_trade_info(trade_id)
+                close_price = info.get('close_price', trade.current_price)
+                realized_pnl = info.get('realized_pnl', 0.0)
+                raw_reason = info.get('reason', 'user')
+
+                reason_label = {
+                    'stop_loss': 'Stop Loss Hit',
+                    'take_profit': 'Take Profit Hit',
+                    'user': 'Closed by User',
+                }.get(raw_reason, 'Closed by User')
+
+                pip_size = 0.01 if 'JPY' in trade.pair else 0.0001
+                pips_gained = (close_price - trade.entry_price) / pip_size
+                if not trade.is_long:
+                    pips_gained = -pips_gained
+
                 self.logger.info(
-                    f"Trade closed detected: {trade_id} ({trade.pair})"
+                    f"Trade closed: {trade_id} ({trade.pair}) | "
+                    f"Entry: {trade.entry_price:.5f} | Close: {close_price:.5f} "
+                    f"({pips_gained:+.1f} pips) | P/L: ${realized_pnl:+.2f} | {reason_label}"
                 )
+
                 self.alert_manager.alert_trade_closed(
                     pair=trade.pair,
-                    pnl=0.0,
-                    reason="Closed (SL/TP/manual)",
+                    pnl=realized_pnl,
+                    close_price=close_price,
+                    entry_price=trade.entry_price,
+                    stop_loss=trade.stop_loss,
+                    take_profit=trade.take_profit,
+                    pips=pips_gained,
+                    reason=reason_label,
                 )
+
+                # Log to Supabase via trade_manager if available
+                managed = self.trade_manager.managed_trades.get(trade_id)
+                if managed and self.trade_manager.supabase_logger:
+                    from datetime import timezone as _tz
+                    sl = trade.stop_loss
+                    tp = trade.take_profit
+                    sl_pips = abs(trade.entry_price - sl) / pip_size if sl else 0.0
+                    tp_pips = abs(trade.entry_price - tp) / pip_size if tp else 0.0
+                    self.trade_manager.supabase_logger.log_closed_trade({
+                        'trade_id': trade_id,
+                        'pair': trade.pair,
+                        'side': trade.side.value.upper(),
+                        'units': trade.units,
+                        'entry_price': trade.entry_price,
+                        'close_price': close_price,
+                        'stop_loss': sl,
+                        'take_profit': tp,
+                        'sl_pips': round(sl_pips, 1),
+                        'tp_pips': round(tp_pips, 1),
+                        'pips_gained': round(pips_gained, 1),
+                        'realized_pnl': round(realized_pnl, 2),
+                        'close_reason': raw_reason,
+                        'entry_reason': managed.entry_reason,
+                        'confidence': managed.confidence,
+                        'setup_type': managed.setup_type,
+                        'reviewer_verdict': managed.reviewer_verdict,
+                        'reviewer_reason': managed.reviewer_reason,
+                        'strategy_name': managed.strategy_name,
+                        'atr_value': managed.atr_value,
+                        'r_multiple': round(pips_gained / sl_pips, 2) if sl_pips else None,
+                        'open_time': managed.entry_time.isoformat() if managed.entry_time else None,
+                        'close_time': datetime.now(_tz.utc).isoformat(),
+                    })
+
+                self.trade_manager.unregister_trade(trade_id)
                 with self._trades_lock:
                     self._known_open_trades.pop(trade_id, None)
 
@@ -712,3 +794,31 @@ def _get_atr_multiplier(atr_val: float, candles: List[Dict], atr_period: int = 1
     if ratio < 0.8:
         return 1.5
     return 2.0
+
+
+def _m15_momentum_aligned(m15_candles: list, is_long: bool) -> bool:
+    """
+    Returns True if the last 5 M15 candles support the intended direction.
+    Blocks only when momentum clearly contradicts — ambiguous/flat = allowed.
+    """
+    recent = m15_candles[-5:] if len(m15_candles) >= 5 else m15_candles
+    if len(recent) < 3:
+        return False  # not enough data — don't risk it
+
+    bullish = sum(
+        1 for c in recent
+        if float(c.get('close', 0) or c.get('mid', {}).get('c', 0)) >
+           float(c.get('open',  0) or c.get('mid', {}).get('o', 0))
+    )
+    bearish = len(recent) - bullish
+
+    first_close = float(recent[0].get('close', 0) or recent[0].get('mid', {}).get('c', 0))
+    last_close  = float(recent[-1].get('close', 0) or recent[-1].get('mid', {}).get('c', 0))
+    net_move = last_close - first_close
+
+    if is_long:
+        # Block only if clearly bearish momentum
+        return not (bearish > bullish and net_move < 0)
+    else:
+        # Block only if clearly bullish momentum
+        return not (bullish > bearish and net_move > 0)
