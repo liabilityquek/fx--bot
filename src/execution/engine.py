@@ -473,7 +473,7 @@ class TradingEngine:
         # Log details of positions being counted
         if open_usd_long > 0 or open_usd_short > 0:
             counted_positions = [
-                f"{pos.pair} {'LONG' if pos.is_long else 'SHORT'} units={pos.units}"
+                f"{pos.pair} {'LONG' if pos.is_long else 'SHORT'} net_units={pos.net_units}"
                 for pos in positions if not pos.is_flat
             ]
             self.logger.info(
