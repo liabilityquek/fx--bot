@@ -4,9 +4,9 @@ import os
 import sys
 
 # Add src to path
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), 'src'))
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from monitoring.supabase_logger import create_supabase_logger
+from src.monitoring.supabase_logger import create_supabase_logger
 
 
 def test_direct_client():

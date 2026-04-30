@@ -109,6 +109,99 @@ Note: the weekend guard, holiday guard, and kill switch block **new** trades onl
 
 ---
 
+## Supabase Integration
+
+The bot uses Supabase for persistent trade logging and future RAG retrieval.
+
+### Table Schema
+
+**trades table:**
+- trade_id (text, primary key)
+- pair (text)
+- side (text) - BUY or SELL
+- units (numeric)
+- entry_price (numeric)
+- stop_loss (numeric)
+- take_profit (numeric)
+- close_price (numeric, optional)
+- sl_pips (numeric, optional)
+- tp_pips (numeric, optional)
+- pips_gained (numeric, optional)
+- realized_pnl (numeric, optional)
+- close_reason (text, optional)
+- entry_reason (text, optional)
+- confidence (numeric, optional)
+- setup_type (text, optional)
+- reviewer_verdict (text, optional)
+- reviewer_reason (text, optional)
+- strategy_name (text, optional)
+- atr_value (numeric, optional)
+- r_multiple (numeric, optional)
+- open_time (timestamp, optional)
+- close_time (timestamp, optional)
+
+### CRUD Operations
+
+**Insert trade:**
+```python
+from src.monitoring.supabase_logger import create_supabase_logger
+logger = create_supabase_logger()
+if logger:
+    trade_data = {
+        'trade_id': 'trade_123',
+        'pair': 'EUR/USD',
+        'direction': 'BUY',
+        'units': 1000,
+        'entry_price': 1.0850,
+        'stop_loss': 1.0800,
+        'take_profit': 1.0950,
+        'entry_time': datetime.now().isoformat(),
+        'confidence': 0.75,
+        'setup_type': 'BREAKOUT'
+    }
+    logger.insert_trade(trade_data)
+```
+
+**Update trade:**
+```python
+logger.update_trade('trade_123', {
+    'close_price': 1.0900,
+    'pnl': 50.0,
+    'pnl_pips': 50.0,
+    'close_reason': 'TP'
+})
+```
+
+**Query trades:**
+```python
+# Get single trade
+trade = logger.get_trade('trade_123')
+
+# Get recent trades
+recent = logger.get_recent_trades(limit=10)
+```
+
+### Troubleshooting
+
+Run diagnostic script:
+```bash
+python diagnose_supabase.py
+```
+
+Check connection and table access:
+```bash
+python check_url.py
+python src/db/check_tables.py
+```
+
+### Environment Variables
+
+Required:
+- `SUPABASE_URL` - Project URL (e.g., https://<project-id>.supabase.co)
+- `SUPABASE_KEY` - Service role key for server-side operations
+
+---
+
 ## Environment Variables
 
 Copy `.env.template` to `.env` and fill in all values before deployment.
@@ -127,6 +220,8 @@ Copy `.env.template` to `.env` and fill in all values before deployment.
 | `TELEGRAM_CHAT_ID` | Your Telegram chat ID |
 | `ALERT_ENABLED` | `true` to enable Telegram alerts |
 | `JB_NEWS_API_KEY` | JB News API key for economic calendar and news headlines |
+| `SUPABASE_URL` | Supabase project URL (e.g., https://<project-id>.supabase.co) |
+| `SUPABASE_KEY` | Supabase service role key for server-side operations |
 
 **Recommended:**
 
