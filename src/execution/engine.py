@@ -657,30 +657,13 @@ class TradingEngine:
                     sl = trade.stop_loss
                     tp = trade.take_profit
                     sl_pips = abs(trade.entry_price - sl) / pip_size if sl else 0.0
-                    tp_pips = abs(trade.entry_price - tp) / pip_size if tp else 0.0
-                    self.trade_manager.supabase_logger.log_closed_trade({
-                        'trade_id': trade_id,
-                        'pair': trade.pair,
-                        'side': trade.side.value.upper(),
-                        'units': trade.units,
-                        'entry_price': trade.entry_price,
+                    r_multiple = round(pips_gained / sl_pips, 2) if sl_pips else None
+                    self.trade_manager.supabase_logger.update_trade(trade_id, {
                         'close_price': close_price,
-                        'stop_loss': sl,
-                        'take_profit': tp,
-                        'sl_pips': round(sl_pips, 1),
-                        'tp_pips': round(tp_pips, 1),
                         'pips_gained': round(pips_gained, 1),
                         'realized_pnl': round(realized_pnl, 2),
                         'close_reason': raw_reason,
-                        'entry_reason': managed.entry_reason,
-                        'confidence': managed.confidence,
-                        'setup_type': managed.setup_type,
-                        'reviewer_verdict': managed.reviewer_verdict,
-                        'reviewer_reason': managed.reviewer_reason,
-                        'strategy_name': managed.strategy_name,
-                        'atr_value': managed.atr_value,
-                        'r_multiple': round(pips_gained / sl_pips, 2) if sl_pips else None,
-                        'open_time': managed.entry_time.isoformat() if managed.entry_time else None,
+                        'r_multiple': r_multiple,
                         'close_time': datetime.now(_tz.utc).isoformat(),
                     })
 

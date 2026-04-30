@@ -200,7 +200,33 @@ class TradeManager:
             f"Registered trade {trade.trade_id}: {trade.pair} "
             f"{trade.side.value.upper()} {trade.units:,} units"
         )
-        
+
+        # Log to Supabase if available
+        if self.supabase_logger:
+            pip_size = 0.01 if 'JPY' in trade.pair else 0.0001
+            sl_pips = abs(trade.entry_price - trade.stop_loss) / pip_size if trade.stop_loss else 0.0
+            tp_pips = abs(trade.take_profit - trade.entry_price) / pip_size if trade.take_profit else 0.0
+
+            self.supabase_logger.insert_trade({
+                'trade_id': trade.trade_id,
+                'pair': trade.pair,
+                'side': trade.side.value.upper(),
+                'units': trade.units,
+                'entry_price': trade.entry_price,
+                'stop_loss': trade.stop_loss,
+                'take_profit': trade.take_profit,
+                'sl_pips': round(sl_pips, 1),
+                'tp_pips': round(tp_pips, 1),
+                'entry_reason': entry_reason,
+                'confidence': confidence,
+                'setup_type': setup_type,
+                'reviewer_verdict': reviewer_verdict,
+                'reviewer_reason': reviewer_reason,
+                'strategy_name': strategy_name,
+                'atr_value': None,  # Will be updated later via update_trade_atr()
+                'open_time': trade.open_time.isoformat() if trade.open_time else None,
+            })
+
         return managed
     
     def unregister_trade(self, trade_id: str):
@@ -216,6 +242,10 @@ class TradeManager:
         with self._lock:
             if trade_id in self.managed_trades:
                 self.managed_trades[trade_id].atr_value = atr_value
+
+        # Update Supabase if available
+        if self.supabase_logger:
+            self.supabase_logger.update_trade(trade_id, {'atr_value': atr_value})
 
     def sync_trades(self) -> Dict[str, str]:
         """
@@ -592,29 +622,12 @@ class TradeManager:
                     )
 
                 if self.supabase_logger:
-                    self.supabase_logger.log_closed_trade({
-                        'trade_id': trade_id,
-                        'pair': managed.trade.pair,
-                        'side': managed.trade.side.value.upper(),
-                        'units': managed.trade.units,
-                        'entry_price': entry,
+                    self.supabase_logger.update_trade(trade_id, {
                         'close_price': close_price,
-                        'stop_loss': sl,
-                        'take_profit': tp,
-                        'sl_pips': round(sl_pips, 1),
-                        'tp_pips': round(tp_pips, 1),
                         'pips_gained': round(pips, 1),
                         'realized_pnl': round(realized_pnl, 2),
                         'close_reason': raw_reason,
-                        'entry_reason': managed.entry_reason,
-                        'confidence': managed.confidence,
-                        'setup_type': managed.setup_type,
-                        'reviewer_verdict': managed.reviewer_verdict,
-                        'reviewer_reason': managed.reviewer_reason,
-                        'strategy_name': managed.strategy_name,
-                        'atr_value': managed.atr_value,
                         'r_multiple': r_multiple,
-                        'open_time': managed.entry_time.isoformat() if managed.entry_time else None,
                         'close_time': datetime.now(_tz.utc).isoformat(),
                     })
             else:
