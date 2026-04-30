@@ -433,6 +433,33 @@ class TradingEngine:
             )
             return
 
+        # Phase 1.1: Confluence validation
+        confluence_count = _extract_confluence_count(result.llm_reasoning)
+        min_confluences = settings.MIN_CONFLUENCES
+        if confluence_count < min_confluences:
+            self.logger.info(
+                f"{pair}: REJECTED — insufficient confluences "
+                f"({confluence_count} < {min_confluences} required)"
+            )
+            return
+
+        # Phase 1.3: Setup type quality filter
+        setup_quality = _get_setup_quality_score(result.setup_type)
+        if setup_quality == 0:
+            self.logger.info(
+                f"{pair}: REJECTED — low-quality setup type ({result.setup_type})"
+            )
+            return
+
+        # Require higher confidence for lower-quality setups
+        min_confidence_for_setup = _get_min_confidence_for_setup(result.setup_type)
+        if result.confidence < min_confidence_for_setup:
+            self.logger.info(
+                f"{pair}: REJECTED — confidence {result.confidence:.2f} below minimum "
+                f"{min_confidence_for_setup:.2f} for setup type {result.setup_type}"
+            )
+            return
+
         # Conflict check — skip if existing position in opposite direction
         is_long = result.final_signal == Signal.BUY
 
@@ -507,6 +534,18 @@ class TradingEngine:
             pair, candles, entry_price, is_long
         )
         sl_pips_int = max(1, int(sl_pips))
+
+        # Phase 1.2: Minimum RR validation
+        from config.pairs import PAIR_INFO
+        pip_value = PAIR_INFO.get(pair, {}).get('pip_value', 0.0001)
+        tp_pips = abs(take_profit - entry_price) / pip_value
+        rr_ratio = tp_pips / sl_pips if sl_pips > 0 else 0.0
+        min_rr = settings.MIN_RR_RATIO
+        if rr_ratio < min_rr:
+            self.logger.info(
+                f"{pair}: REJECTED — poor RR ratio ({rr_ratio:.2f} < {min_rr:.2f} required)"
+            )
+            return
 
         # Position size
         size_result = self.position_sizer.calculate(
@@ -880,3 +919,96 @@ def _m15_momentum_aligned(m15_candles: list, is_long: bool) -> bool:
     else:
         # Block only if clearly bullish momentum
         return not (bullish > bearish and net_move > 0)
+
+
+def _extract_confluence_count(llm_reasoning: str) -> int:
+    """
+    Extract confluence count from LLM reasoning string.
+
+    Looks for patterns like:
+    - "3 confluences"
+    - "confluence: 3"
+    - "3 factors"
+    - "3 reasons"
+
+    Returns 0 if no confluence count found.
+    """
+    if not llm_reasoning:
+        return 0
+
+    import re
+
+    # Try to find explicit confluence count
+    patterns = [
+        r'(\d+)\s*confluence',
+        r'confluence[:\s]*(\d+)',
+        r'(\d+)\s*factors?',
+        r'(\d+)\s*reasons?',
+    ]
+
+    for pattern in patterns:
+        match = re.search(pattern, llm_reasoning, re.IGNORECASE)
+        if match:
+            try:
+                return int(match.group(1))
+            except (ValueError, IndexError):
+                continue
+
+    # If no explicit count found, estimate from reasoning length
+    # This is a fallback - longer reasoning typically indicates more factors
+    word_count = len(llm_reasoning.split())
+    if word_count > 100:
+        return 3  # Assume at least 3 confluences for detailed reasoning
+    elif word_count > 50:
+        return 2
+    else:
+        return 1
+
+
+def _get_setup_quality_score(setup_type: str) -> int:
+    """
+    Return quality score for setup type (0-5).
+
+    Quality tiers:
+    - 5: BREAKOUT (highest quality)
+    - 4: PULLBACK
+    - 3: REVERSAL
+    - 2: LIQUIDITY_SWEEP
+    - 0: RANGE, NONE (rejected)
+
+    Returns 0 for setups that should be rejected.
+    """
+    quality_map = {
+        'BREAKOUT': 5,
+        'PULLBACK': 4,
+        'REVERSAL': 3,
+        'LIQUIDITY_SWEEP': 2,
+        'RANGE': 0,
+        'NONE': 0,
+    }
+    return quality_map.get(setup_type.upper(), 0)
+
+
+def _get_min_confidence_for_setup(setup_type: str) -> float:
+    """
+    Return minimum confidence threshold for setup type.
+
+    Higher-quality setups can proceed with lower confidence.
+    Lower-quality setups require higher confidence.
+
+    Returns:
+    - BREAKOUT: 0.60 (standard threshold)
+    - PULLBACK: 0.65
+    - REVERSAL: 0.70
+    - LIQUIDITY_SWEEP: 0.75
+    - RANGE, NONE: 1.00 (effectively rejected)
+    """
+    confidence_map = {
+        'BREAKOUT': 0.60,
+        'PULLBACK': 0.65,
+        'REVERSAL': 0.70,
+        'LIQUIDITY_SWEEP': 0.75,
+        'RANGE': 1.00,
+        'NONE': 1.00,
+    }
+    return confidence_map.get(setup_type.upper(), 0.70)

@@ -99,9 +99,13 @@ class Settings:
     DEFAULT_STOP_LOSS_PIPS: int = int(os.getenv('DEFAULT_STOP_LOSS_PIPS', '50'))
     DEFAULT_TAKE_PROFIT_RATIO: float = float(os.getenv('DEFAULT_TAKE_PROFIT_RATIO', '2.0'))
 
+    # Trade quality filters (Phase 1)
+    MIN_CONFLUENCES: int = int(os.getenv('MIN_CONFLUENCES', '3'))
+    MIN_RR_RATIO: float = float(os.getenv('MIN_RR_RATIO', '2.5'))
+
     # Trailing stop
-    TRAILING_STOP_ACTIVATION_PIPS: float = float(os.getenv('TRAILING_STOP_ACTIVATION_PIPS', '7.0'))
-    TRAILING_STOP_DISTANCE_PIPS: float = float(os.getenv('TRAILING_STOP_DISTANCE_PIPS', '3.0'))
+    TRAILING_STOP_ACTIVATION_PIPS: float = float(os.getenv('TRAILING_STOP_ACTIVATION_PIPS', '15.0'))
+    TRAILING_STOP_DISTANCE_PIPS: float = float(os.getenv('TRAILING_STOP_DISTANCE_PIPS', '8.0'))
 
     # Break-even stop
     BREAK_EVEN_ACTIVATION_PIPS: float = float(os.getenv('BREAK_EVEN_ACTIVATION_PIPS', '5.0'))
