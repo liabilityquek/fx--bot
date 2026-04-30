@@ -451,6 +451,12 @@ class TradingEngine:
         new_is_usd_short = (pair in usd_short_pairs and is_long) or (pair in usd_long_pairs and not is_long)
         new_is_usd_long  = (pair in usd_long_pairs and is_long) or (pair in usd_short_pairs and not is_long)
 
+        # Debug logging to understand position counting
+        self.logger.info(
+            f"{pair}: checking USD correlation | total_positions={len(positions)} | "
+            f"non_flat_positions={sum(1 for pos in positions if not pos.is_flat)}"
+        )
+
         open_usd_short = sum(
             1 for pos in positions if not pos.is_flat and (
                 (pos.pair in usd_short_pairs and pos.is_long) or
@@ -463,6 +469,17 @@ class TradingEngine:
                 (pos.pair in usd_short_pairs and pos.is_short)
             )
         )
+
+        # Log details of positions being counted
+        if open_usd_long > 0 or open_usd_short > 0:
+            counted_positions = [
+                f"{pos.pair} {'LONG' if pos.is_long else 'SHORT'} units={pos.units}"
+                for pos in positions if not pos.is_flat
+            ]
+            self.logger.info(
+                f"{pair}: USD correlation | open_usd_long={open_usd_long} | open_usd_short={open_usd_short} | "
+                f"counted_positions={counted_positions}"
+            )
 
         max_corr = settings.MAX_USD_CORRELATED_TRADES
         if new_is_usd_short and open_usd_short >= max_corr:

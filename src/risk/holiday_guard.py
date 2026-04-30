@@ -80,7 +80,17 @@ class HolidayGuard:
 
         today = (now or datetime.now(tz=timezone.utc)).date()
         try:
-            return not self._calendar.is_session(today.isoformat())
+            is_session = self._calendar.is_session(today.isoformat())
+            is_holiday = not is_session
+
+            # Debug logging to understand why April 30, 2026 is flagged as holiday
+            self.logger.info(
+                f"HolidayGuard: checking {today.isoformat()} | "
+                f"is_session={is_session} | is_holiday={is_holiday} | "
+                f"calendar={self._CALENDAR_CODE}"
+            )
+
+            return is_holiday
         except Exception as exc:
             self.logger.warning(
                 f"HolidayGuard: calendar check failed for {today}: {exc} — "
