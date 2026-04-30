@@ -46,6 +46,10 @@ class Settings:
     ANTHROPIC_API_KEY: str = os.getenv('ANTHROPIC_API_KEY', '')
     ANTHROPIC_LLM_MODEL: str = os.getenv('ANTHROPIC_LLM_MODEL', 'claude-haiku-4-5-20251001')
 
+    # NVIDIA NIM fallback (used when Groq credits are exhausted, before Anthropic)
+    NVIDIA_API_KEY: str = os.getenv('NVIDIA_API_KEY', '')
+    NVIDIA_LLM_MODEL: str = os.getenv('NVIDIA_LLM_MODEL', 'nvidia_nim/z-ai/glm4.7')
+
     # Reviewer model — Groq small model (fast, sufficient for review task)
     # Anthropic fallback uses ANTHROPIC_LLM_MODEL above
     REVIEWER_LLM_MODEL: str = os.getenv('REVIEWER_LLM_MODEL', 'llama-3.1-8b-instant')
@@ -85,6 +89,9 @@ class Settings:
 
     # Execution interval derived from timeframe (seconds)
     EXECUTION_INTERVAL_SECONDS: int = int(os.getenv('EXECUTION_INTERVAL_SECONDS', '3600'))
+
+    # Monitoring interval for high-frequency checks (trailing stops, risk, close detection)
+    MONITORING_INTERVAL_SECONDS: int = int(os.getenv('MONITORING_INTERVAL_SECONDS', '60'))
 
     # Risk Management
     MAX_RISK_PER_TRADE: float = float(os.getenv('MAX_RISK_PER_TRADE', '0.02'))

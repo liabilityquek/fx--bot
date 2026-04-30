@@ -21,9 +21,9 @@ TradingEngine (H1 loop)
 │   │   ├── USD sentiment score (computed from all 5 pair price changes)
 │   │   ├── JB News headlines
 │   │   └── Upcoming high-impact events (EventMonitor)
-│   ├── LLMAgent / Analyst (Groq llama-3.3-70b-versatile, Anthropic Claude Haiku as backup)
+│   ├── LLMAgent / Analyst (Groq llama-3.3-70b-versatile, NVIDIA nvidia_nim/z-ai/glm4.7 as fallback, Anthropic Claude Haiku as final fallback)
 │   │   └── Receives H1 indicators + D1/H4 bias + macro context + USD sentiment
-│   └── ReviewerAgent (Groq llama-3.1-8b-instant, Anthropic Claude Haiku as backup)
+│   └── ReviewerAgent (Groq llama-3.1-8b-instant, NVIDIA nvidia_nim/z-ai/glm4.7 as fallback, Anthropic Claude Haiku as final fallback)
 ├── TradeManager (per-cycle)
 │   ├── Break-even stop (moves SL to entry after N pips profit)
 │   ├── Partial take-profit (closes 50% at 1:1 RR)
@@ -32,7 +32,7 @@ TradingEngine (H1 loop)
 └── AlertsManager (Telegram alerts out, commands in)
 ```
 
-**Stack:** Python 3.11, Docker, OANDA API, Groq API (Llama 3.3 70B), Anthropic API (Claude Haiku, backup), Telegram Bot API, JB News API, FRED API (St. Louis Fed), exchange_calendars
+**Stack:** Python 3.11, Docker, OANDA API, Groq API (Llama 3.3 70B), NVIDIA API (NIM), Anthropic API (Claude Haiku, backup), Telegram Bot API, JB News API, FRED API (St. Louis Fed), exchange_calendars
 
 ---
 
@@ -51,7 +51,7 @@ Every cycle per pair:
    - APPROVED → trade executes
    - ADJUSTED → modified confidence, may drop below threshold → no trade
    - REJECTED → trade blocked
-9. If either AI provider is unavailable → HOLD, Telegram alert fired
+9. If either AI provider is unavailable → HOLD, Telegram alert fired. Provider hierarchy: Groq (primary) → NVIDIA (fallback) → Anthropic (final fallback) → HOLD
 
 ---
 
@@ -72,6 +72,7 @@ fx-trading-bot/
 │   ├── risk/              # Kill switch, weekend guard, holiday guard, position sizing
 │   ├── utils/             # Helpers
 │   └── voting/            # DecisionEngine (analyst → reviewer pipeline)
+├── tests/                 # Unit tests
 ├── data/
 │   ├── cache/             # Market data cache (gitignored)
 │   └── managed_trades.json  # Trailing stop state — persisted across restarts
@@ -120,7 +121,8 @@ Copy `.env.template` to `.env` and fill in all values before deployment.
 | `OANDA_ACCOUNT_ID` | OANDA practice account ID |
 | `OANDA_ENVIRONMENT` | `practice` (paper) or `live` |
 | `GROQ_API_KEY` | Groq API key (primary LLM — analyst + reviewer) |
-| `ANTHROPIC_API_KEY` | Anthropic API key (fallback LLM — Claude Haiku) |
+| `NVIDIA_API_KEY` | NVIDIA API key (fallback LLM — analyst + reviewer) |
+| `ANTHROPIC_API_KEY` | Anthropic API key (final fallback LLM — Claude Haiku) |
 | `TELEGRAM_BOT_TOKEN` | Telegram bot token from @BotFather |
 | `TELEGRAM_CHAT_ID` | Your Telegram chat ID |
 | `ALERT_ENABLED` | `true` to enable Telegram alerts |
@@ -163,6 +165,7 @@ Copy `.env.template` to `.env` and fill in all values before deployment.
 | `EXECUTION_INTERVAL_SECONDS` | `3600` | Cycle interval in seconds (1 hour) |
 | `CANDLE_COUNT` | `100` | H1 candles fetched per cycle per pair |
 | `ANTHROPIC_LLM_MODEL` | `claude-haiku-4-5-20251001` | Anthropic fallback model |
+| `NVIDIA_LLM_MODEL` | `nvidia_nim/z-ai/glm4.7` | NVIDIA fallback model |
 | `REVIEWER_LLM_MODEL` | `llama-3.1-8b-instant` | Groq model for the reviewer agent |
 | `LOG_LEVEL` | `INFO` | Logging verbosity (`DEBUG`, `INFO`, `WARNING`) |
 

@@ -5,8 +5,9 @@ a trade recommendation is executed right now.
 
 Provider priority (same as LLMAgent):
   1. Groq llama-3.1-8b-instant (primary — fast, sufficient for review task)
-  2. Anthropic Claude Haiku (fallback on Groq credit exhaustion)
-  3. REJECTED + reviewer_available=False when both are permanently exhausted.
+  2. NVIDIA nvidia_nim/z-ai/glm4.7 (fallback on Groq credit exhaustion)
+  3. Anthropic Claude Haiku (fallback on NVIDIA credit exhaustion)
+  4. REJECTED + reviewer_available=False when all are permanently exhausted.
      Caller (DecisionEngine) treats this as HOLD + fires Telegram alert.
 
 The reviewer uses a smaller Groq model than the analyst deliberately —
@@ -85,7 +86,7 @@ Speak like a trader in your reason — be direct and specific."""
 class ReviewerAgent:
     """
     Senior FX execution trader.
-    Provider priority: Groq (primary) → Anthropic (fallback).
+    Provider priority: Groq (primary) → NVIDIA (fallback) → Anthropic (fallback).
     """
 
     def __init__(self, logger: Optional[logging.Logger] = None):
@@ -96,12 +97,18 @@ class ReviewerAgent:
         self._groq_model:     str  = ''
         self._groq_exhausted: bool = False
 
+        # NVIDIA — fallback
+        self._nvidia_client: Optional[OpenAI] = None
+        self._nvidia_model:     str  = ''
+        self._nvidia_exhausted: bool = False
+
         # Anthropic — fallback
         self._anthropic_client = None
         self._anthropic_model:     str  = ''
         self._anthropic_exhausted: bool = False
 
         self._init_groq()
+        self._init_nvidia()
         self._init_anthropic()
 
     # ------------------------------------------------------------------
@@ -130,6 +137,24 @@ class ReviewerAgent:
             self.logger.warning(f'ReviewerAgent: Groq init failed: {exc}')
             self._groq_exhausted = True
 
+    def _init_nvidia(self) -> None:
+        """NVIDIA fallback — activates when Groq credits are exhausted."""
+        try:
+            from config.settings import settings
+            if not settings.NVIDIA_API_KEY:
+                self.logger.info('ReviewerAgent: NVIDIA_API_KEY not set — NVIDIA fallback disabled')
+                self._nvidia_exhausted = True
+                return
+            self._nvidia_client = OpenAI(
+                api_key=settings.NVIDIA_API_KEY,
+                base_url='https://integrate.api.nvidia.com/v1',
+            )
+            self._nvidia_model = settings.NVIDIA_LLM_MODEL
+            self.logger.info(f'ReviewerAgent: NVIDIA fallback ready ({self._nvidia_model})')
+        except Exception as exc:
+            self.logger.warning(f'ReviewerAgent: NVIDIA init failed: {exc}')
+            self._nvidia_exhausted = True
+
     def _init_anthropic(self) -> None:
         """Anthropic fallback — activates when Groq credits are exhausted."""
         try:
@@ -156,16 +181,18 @@ class ReviewerAgent:
 
     @property
     def is_available(self) -> bool:
-        return not (self._groq_exhausted and self._anthropic_exhausted)
+        return not (self._groq_exhausted and self._nvidia_exhausted and self._anthropic_exhausted)
 
     @property
     def both_exhausted(self) -> bool:
-        return self._groq_exhausted and self._anthropic_exhausted
+        return self._groq_exhausted and self._nvidia_exhausted and self._anthropic_exhausted
 
     @property
     def active_provider(self) -> str:
         if not self._groq_exhausted:
             return 'groq'
+        if not self._nvidia_exhausted:
+            return 'nvidia'
         if not self._anthropic_exhausted:
             return 'anthropic'
         return 'none'
@@ -248,6 +275,28 @@ class ReviewerAgent:
                         reviewer_available=True,
                     )
 
+        # Try NVIDIA fallback
+        if not self._nvidia_exhausted and self._nvidia_client is not None:
+            try:
+                return self._call_nvidia(user_msg, analyst_vote)
+            except Exception as exc:
+                if _is_credit_exhausted(exc):
+                    self.logger.warning(
+                        'ReviewerAgent: NVIDIA credits exhausted — switching to Anthropic'
+                    )
+                    self._nvidia_exhausted = True
+                else:
+                    self.logger.warning(
+                        f'ReviewerAgent: NVIDIA transient error for {pair}: {exc}'
+                    )
+                    # Transient — pass through this cycle, don't fire unavailability alert
+                    return ReviewResult(
+                        verdict=ReviewVerdict.APPROVED,
+                        adjusted_confidence=analyst_vote.confidence,
+                        reason='Reviewer transient error — passing through',
+                        reviewer_available=True,
+                    )
+
         # Try Anthropic fallback
         if not self._anthropic_exhausted and self._anthropic_client is not None:
             try:
@@ -255,7 +304,7 @@ class ReviewerAgent:
             except Exception as exc:
                 if _is_credit_exhausted(exc):
                     self.logger.warning(
-                        'ReviewerAgent: Anthropic exhausted — both providers down'
+                        'ReviewerAgent: Anthropic exhausted — all providers down'
                     )
                     self._anthropic_exhausted = True
                 else:
@@ -269,7 +318,7 @@ class ReviewerAgent:
                         reviewer_available=True,
                     )
 
-        # Both permanently exhausted
+        # All permanently exhausted
         return ReviewResult(
             verdict=ReviewVerdict.REJECTED,
             adjusted_confidence=0.0,
@@ -280,6 +329,19 @@ class ReviewerAgent:
     def _call_groq(self, user_msg: str, analyst_vote: AgentVote) -> ReviewResult:
         response = self._groq_client.chat.completions.create(
             model=self._groq_model,
+            max_tokens=200,
+            messages=[
+                {'role': 'system', 'content': _REVIEWER_SYSTEM_PROMPT},
+                {'role': 'user',   'content': user_msg},
+            ],
+        )
+        return _parse_review_response(
+            response.choices[0].message.content.strip(), analyst_vote
+        )
+
+    def _call_nvidia(self, user_msg: str, analyst_vote: AgentVote) -> ReviewResult:
+        response = self._nvidia_client.chat.completions.create(
+            model=self._nvidia_model,
             max_tokens=200,
             messages=[
                 {'role': 'system', 'content': _REVIEWER_SYSTEM_PROMPT},

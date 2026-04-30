@@ -118,12 +118,14 @@ class TestNormalTradingDay(unittest.TestCase):
 
     # Layer 3
     def test_emergency_check_runs(self):
-        self.engine._run_cycle()
+        """Emergency check runs in monitoring cycle, not main cycle."""
+        self.engine._run_monitoring_cycle()
         self.engine.emergency_controller.check_emergency_conditions.assert_called_once()
 
     # Layer 2 + 6
     def test_trade_manager_update_runs(self):
-        self.engine._run_cycle()
+        """Trade manager update runs in monitoring cycle, not main cycle."""
+        self.engine._run_monitoring_cycle()
         self.engine.trade_manager.update_all_trades.assert_called_once()
 
     # Pair processing should run on normal days
@@ -147,26 +149,41 @@ class TestNormalTradingDay(unittest.TestCase):
 
     # Layer 3 — emergency shutdown triggered
     def test_emergency_shutdown_calls_close_all(self):
+        """Emergency shutdown triggered in monitoring cycle."""
         self.engine.emergency_controller.check_emergency_conditions.return_value = (
             _panic_emergency_status(ShutdownReason.DRAWDOWN_LIMIT)
         )
-        self.engine._run_cycle()
+        self.engine._run_monitoring_cycle()
         self.engine.trade_manager.emergency_close_all.assert_called_once_with(
             reason=ShutdownReason.DRAWDOWN_LIMIT.value
         )
 
     def test_no_emergency_close_when_conditions_normal(self):
-        self.engine._run_cycle()
+        """No emergency close when conditions are normal."""
+        self.engine._run_monitoring_cycle()
         self.engine.trade_manager.emergency_close_all.assert_not_called()
 
     # Layer 4 — close detection: trade that disappears triggers alert
     def test_closed_trade_detection_fires_alert(self):
+        """Close detection runs in monitoring cycle."""
         fake_trade = MagicMock()
         fake_trade.trade_id = "t1"
         fake_trade.pair = "EUR_USD"
+        fake_trade.entry_price = 1.1000
+        fake_trade.current_price = 1.1050
+        fake_trade.stop_loss = 1.0950
+        fake_trade.take_profit = 1.1100
+        fake_trade.is_long = True
+        fake_trade.units = 100000
+        fake_trade.unrealized_pnl = 50.0
         self.engine._known_open_trades = {"t1": fake_trade}
         self.engine.broker.get_open_trades.return_value = []
-        self.engine._run_cycle()
+        self.engine.broker.get_closed_trade_info.return_value = {
+            'close_price': 1.1050,
+            'realized_pnl': 50.0,
+            'reason': 'take_profit'
+        }
+        self.engine._run_monitoring_cycle()
         self.engine.alert_manager.alert_trade_closed.assert_called_once()
 
     # Exposure tracker is updated each cycle
@@ -191,30 +208,46 @@ class TestPublicHoliday(unittest.TestCase):
 
     # Layer 3 must still run
     def test_emergency_check_still_runs(self):
-        self.engine._run_cycle()
+        """Emergency check still runs in monitoring cycle on holiday."""
+        self.engine._run_monitoring_cycle()
         self.engine.emergency_controller.check_emergency_conditions.assert_called_once()
 
     # Layer 2 + 6 must still run
     def test_trade_manager_still_runs(self):
-        self.engine._run_cycle()
+        """Trade manager still runs in monitoring cycle on holiday."""
+        self.engine._run_monitoring_cycle()
         self.engine.trade_manager.update_all_trades.assert_called_once()
 
     # Layer 4 must still run
     def test_close_detection_still_runs(self):
+        """Close detection still runs in monitoring cycle on holiday."""
         fake_trade = MagicMock()
         fake_trade.trade_id = "t1"
         fake_trade.pair = "EUR_USD"
+        fake_trade.entry_price = 1.1000
+        fake_trade.current_price = 1.1050
+        fake_trade.stop_loss = 1.0950
+        fake_trade.take_profit = 1.1100
+        fake_trade.is_long = True
+        fake_trade.units = 100000
+        fake_trade.unrealized_pnl = 50.0
         self.engine._known_open_trades = {"t1": fake_trade}
         self.engine.broker.get_open_trades.return_value = []
-        self.engine._run_cycle()
+        self.engine.broker.get_closed_trade_info.return_value = {
+            'close_price': 1.1050,
+            'realized_pnl': 50.0,
+            'reason': 'take_profit'
+        }
+        self.engine._run_monitoring_cycle()
         self.engine.alert_manager.alert_trade_closed.assert_called_once()
 
     # Layer 3 emergency shutdown still works on holiday
     def test_emergency_shutdown_on_holiday(self):
+        """Emergency shutdown still works in monitoring cycle on holiday."""
         self.engine.emergency_controller.check_emergency_conditions.return_value = (
             _panic_emergency_status(ShutdownReason.EXPOSURE_BREACH)
         )
-        self.engine._run_cycle()
+        self.engine._run_monitoring_cycle()
         self.engine.trade_manager.emergency_close_all.assert_called_once_with(
             reason=ShutdownReason.EXPOSURE_BREACH.value
         )
@@ -321,6 +354,60 @@ class TestNewsEventSuspension(unittest.TestCase):
         engine = _make_engine_with_suspension(is_suspended=False)
         engine._process_pair("EUR_USD", _make_account(), [])
         engine.broker.get_historical_candles.assert_called_once()
+
+
+# ---------------------------------------------------------------------------
+# Monitoring cycle tests
+# ---------------------------------------------------------------------------
+
+class TestMonitoringCycle(unittest.TestCase):
+
+    def test_monitoring_cycle_calls_trade_manager_update(self):
+        """Verify monitoring cycle calls trade_manager.update_all_trades."""
+        engine = _make_engine()
+        engine._run_monitoring_cycle()
+        engine.trade_manager.update_all_trades.assert_called_once()
+
+    def test_monitoring_cycle_calls_exposure_tracker_update(self):
+        """Verify monitoring cycle calls exposure_tracker.update_positions."""
+        engine = _make_engine()
+        engine._run_monitoring_cycle()
+        engine.exposure_tracker.update_positions.assert_called_once()
+
+    def test_monitoring_cycle_checks_emergency_conditions(self):
+        """Verify monitoring cycle checks emergency conditions."""
+        engine = _make_engine()
+        engine._run_monitoring_cycle()
+        engine.emergency_controller.check_emergency_conditions.assert_called_once()
+
+    def test_monitoring_cycle_detects_closed_trades(self):
+        """Verify monitoring cycle detects closed trades."""
+        engine = _make_engine()
+        fake_trade = MagicMock()
+        fake_trade.trade_id = "t1"
+        fake_trade.pair = "EUR_USD"
+        fake_trade.entry_price = 1.1000
+        fake_trade.current_price = 1.1050
+        fake_trade.stop_loss = 1.0950
+        fake_trade.take_profit = 1.1100
+        fake_trade.is_long = True
+        fake_trade.units = 100000
+        fake_trade.unrealized_pnl = 50.0
+        engine._known_open_trades = {"t1": fake_trade}
+        engine.broker.get_open_trades.return_value = []
+        engine.broker.get_closed_trade_info.return_value = {
+            'close_price': 1.1050,
+            'realized_pnl': 50.0,
+            'reason': 'take_profit'
+        }
+        engine._run_monitoring_cycle()
+        engine.alert_manager.alert_trade_closed.assert_called_once()
+
+    def test_monitoring_cycle_updates_trailing_stops(self):
+        """Verify monitoring cycle updates trailing stops via trade_manager."""
+        engine = _make_engine()
+        engine._run_monitoring_cycle()
+        engine.trade_manager.update_all_trades.assert_called_once()
 
 
 if __name__ == "__main__":

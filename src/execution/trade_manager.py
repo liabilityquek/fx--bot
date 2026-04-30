@@ -9,6 +9,7 @@ This module handles:
 
 import json
 import logging
+import threading
 from pathlib import Path
 from typing import Optional, Dict, List, Set
 from dataclasses import dataclass, field
@@ -135,6 +136,9 @@ class TradeManager:
         # Managed trades tracking
         self.managed_trades: Dict[str, ManagedTrade] = {}
 
+        # Thread safety
+        self._lock = threading.Lock()
+
         # Persistent state
         self._state_file = Path(__file__).parent.parent.parent / "data" / "managed_trades.json"
         self._persisted_state: Dict[str, dict] = {}
@@ -188,9 +192,10 @@ class TradeManager:
             reviewer_verdict=reviewer_verdict,
             reviewer_reason=reviewer_reason,
         )
-        
-        self.managed_trades[trade.trade_id] = managed
-        
+
+        with self._lock:
+            self.managed_trades[trade.trade_id] = managed
+
         self.logger.info(
             f"Registered trade {trade.trade_id}: {trade.pair} "
             f"{trade.side.value.upper()} {trade.units:,} units"
@@ -200,102 +205,147 @@ class TradeManager:
     
     def unregister_trade(self, trade_id: str):
         """Remove trade from management."""
-        if trade_id in self.managed_trades:
-            del self.managed_trades[trade_id]
-            self.logger.info(f"Unregistered trade {trade_id}")
-            self._save_state()
+        with self._lock:
+            if trade_id in self.managed_trades:
+                del self.managed_trades[trade_id]
+        self.logger.info(f"Unregistered trade {trade_id}")
+        self._save_state()
 
     def update_trade_atr(self, trade_id: str, atr_value: float) -> None:
         """Update the stored ATR for a managed trade's trailing stop calculation."""
-        if trade_id in self.managed_trades:
-            self.managed_trades[trade_id].atr_value = atr_value
+        with self._lock:
+            if trade_id in self.managed_trades:
+                self.managed_trades[trade_id].atr_value = atr_value
 
     def sync_trades(self) -> Dict[str, str]:
         """
         Synchronize managed trades with broker.
-        
+
         Returns:
             Dict of trade_id -> status (added, removed, synced)
         """
-        result = {}
-        broker_trades = {t.trade_id: t for t in self.broker.get_open_trades()}
-        
-        # Check for closed trades (in managed but not in broker)
-        closed_ids = set(self.managed_trades.keys()) - set(broker_trades.keys())
-        for trade_id in closed_ids:
-            self.logger.info(f"Trade {trade_id} closed (no longer at broker)")
-            self.unregister_trade(trade_id)
-            result[trade_id] = "removed"
-        
-        # Update existing trades
-        for trade_id, trade in broker_trades.items():
-            if trade_id in self.managed_trades:
-                # Update trade data
-                self.managed_trades[trade_id].trade = trade
-                result[trade_id] = "synced"
-            else:
-                # Restore from persisted state if available, else treat as unknown
-                persisted = self._persisted_state.get(trade_id, {})
-                managed = self.register_trade(
-                    trade,
-                    strategy_name=persisted.get("strategy_name", "unknown"),
-                    trailing_stop=persisted.get("trailing_stop_active", False),
-                    trailing_distance=persisted.get("trailing_stop_distance", 0.0),
-                )
-                # Restore peak/trough price tracking so trailing stop continues correctly
-                if persisted:
-                    managed.highest_price = persisted.get("highest_price", trade.entry_price)
-                    managed.lowest_price = persisted.get("lowest_price", trade.entry_price)
-                    managed.break_even_triggered = persisted.get("break_even_triggered", False)
-                    managed.partial_tp_triggered = persisted.get("partial_tp_triggered", False)
-                    managed.atr_value = persisted.get("atr_value", None)
-                    self.logger.info(f"Restored persisted state for trade {trade_id}")
-                result[trade_id] = "added"
-        
-        return result
+        with self._lock:
+            result = {}
+            broker_trades = {t.trade_id: t for t in self.broker.get_open_trades()}
+
+            # Check for closed trades (in managed but not in broker)
+            closed_ids = set(self.managed_trades.keys()) - set(broker_trades.keys())
+            for trade_id in closed_ids:
+                self.logger.info(f"Trade {trade_id} closed (no longer at broker)")
+                del self.managed_trades[trade_id]
+                result[trade_id] = "removed"
+
+            # Update existing trades
+            for trade_id, trade in broker_trades.items():
+                if trade_id in self.managed_trades:
+                    # Update trade data
+                    self.managed_trades[trade_id].trade = trade
+                    result[trade_id] = "synced"
+                else:
+                    # Restore from persisted state if available, else treat as unknown
+                    persisted = self._persisted_state.get(trade_id, {})
+                    managed = ManagedTrade(
+                        trade=trade,
+                        strategy_name=persisted.get("strategy_name", "unknown"),
+                        entry_time=trade.open_time,
+                        initial_sl=trade.stop_loss,
+                        initial_tp=trade.take_profit,
+                        trailing_stop_active=persisted.get("trailing_stop_active", False),
+                        trailing_stop_distance=persisted.get("trailing_stop_distance", 0.0),
+                        highest_price=trade.entry_price,
+                        lowest_price=trade.entry_price,
+                    )
+                    # Restore peak/trough price tracking so trailing stop continues correctly
+                    if persisted:
+                        managed.highest_price = persisted.get("highest_price", trade.entry_price)
+                        managed.lowest_price = persisted.get("lowest_price", trade.entry_price)
+                        managed.break_even_triggered = persisted.get("break_even_triggered", False)
+                        managed.partial_tp_triggered = persisted.get("partial_tp_triggered", False)
+                        managed.atr_value = persisted.get("atr_value", None)
+                        self.logger.info(f"Restored persisted state for trade {trade_id}")
+                    self.managed_trades[trade_id] = managed
+                    result[trade_id] = "added"
+
+            return result
     
     def update_all_trades(self) -> List[TradeManagementResult]:
         """
         Update all managed trades.
-        
+
         Returns:
             List of management actions taken
         """
-        results = []
-        
-        # Sync with broker first
-        self.sync_trades()
-        
-        for trade_id, managed in list(self.managed_trades.items()):
-            # Update price tracking for trailing stops
-            self._update_price_tracking(managed)
+        with self._lock:
+            results = []
 
-            # Check break-even
-            self._check_break_even(managed)
+            # Sync with broker first
+            broker_trades = {t.trade_id: t for t in self.broker.get_open_trades()}
 
-            # Check partial TP
-            self._check_partial_tp(managed)
+            # Check for closed trades (in managed but not in broker)
+            closed_ids = set(self.managed_trades.keys()) - set(broker_trades.keys())
+            for trade_id in closed_ids:
+                self.logger.info(f"Trade {trade_id} closed (no longer at broker)")
+                del self.managed_trades[trade_id]
 
-            # Check trailing stop
-            if managed.trailing_stop_active:
-                result = self._check_trailing_stop(managed)
-                if result and result.action != TradeAction.NONE:
-                    results.append(result)
-            
-            # Check trade age
-            if managed.age_hours > self.max_trade_age_hours:
-                self.logger.warning(
-                    f"Trade {trade_id} is {managed.age_hours:.1f} hours old"
-                )
-                if self.alert_manager:
-                    self.alert_manager.send_alert(
-                        f"Old trade alert: {managed.trade.pair} open for "
-                        f"{managed.age_hours:.0f} hours",
-                        priority='WARNING'
+            # Update existing trades
+            for trade_id, trade in broker_trades.items():
+                if trade_id in self.managed_trades:
+                    # Update trade data
+                    self.managed_trades[trade_id].trade = trade
+                else:
+                    # Restore from persisted state if available, else treat as unknown
+                    persisted = self._persisted_state.get(trade_id, {})
+                    managed = ManagedTrade(
+                        trade=trade,
+                        strategy_name=persisted.get("strategy_name", "unknown"),
+                        entry_time=trade.open_time,
+                        initial_sl=trade.stop_loss,
+                        initial_tp=trade.take_profit,
+                        trailing_stop_active=persisted.get("trailing_stop_active", False),
+                        trailing_stop_distance=persisted.get("trailing_stop_distance", 0.0),
+                        highest_price=trade.entry_price,
+                        lowest_price=trade.entry_price,
                     )
+                    # Restore peak/trough price tracking so trailing stop continues correctly
+                    if persisted:
+                        managed.highest_price = persisted.get("highest_price", trade.entry_price)
+                        managed.lowest_price = persisted.get("lowest_price", trade.entry_price)
+                        managed.break_even_triggered = persisted.get("break_even_triggered", False)
+                        managed.partial_tp_triggered = persisted.get("partial_tp_triggered", False)
+                        managed.atr_value = persisted.get("atr_value", None)
+                        self.logger.info(f"Restored persisted state for trade {trade_id}")
+                    self.managed_trades[trade_id] = managed
 
-        self._save_state()
-        return results
+            for trade_id, managed in list(self.managed_trades.items()):
+                # Update price tracking for trailing stops
+                self._update_price_tracking(managed)
+
+                # Check break-even
+                self._check_break_even(managed)
+
+                # Check partial TP
+                self._check_partial_tp(managed)
+
+                # Check trailing stop
+                if managed.trailing_stop_active:
+                    result = self._check_trailing_stop(managed)
+                    if result and result.action != TradeAction.NONE:
+                        results.append(result)
+
+                # Check trade age
+                if managed.age_hours > self.max_trade_age_hours:
+                    self.logger.warning(
+                        f"Trade {trade_id} is {managed.age_hours:.1f} hours old"
+                    )
+                    if self.alert_manager:
+                        self.alert_manager.send_alert(
+                            f"Old trade alert: {managed.trade.pair} open for "
+                            f"{managed.age_hours:.0f} hours",
+                            priority='WARNING'
+                        )
+
+            self._save_state()
+            return results
     
     def _update_price_tracking(self, managed: ManagedTrade):
         """Update highest/lowest price for trailing stop."""
@@ -477,7 +527,8 @@ class TradeManager:
         """
         from datetime import timezone as _tz
 
-        managed = self.managed_trades.get(trade_id)
+        with self._lock:
+            managed = self.managed_trades.get(trade_id)
 
         if not managed:
             self.logger.warning(f"Trade {trade_id} not in managed trades")
@@ -606,12 +657,19 @@ class TradeManager:
             List of results
         """
         results = []
-        
+
+        with self._lock:
+            for trade_id, managed in list(self.managed_trades.items()):
+                if pairs is None or managed.trade.pair in pairs:
+                    # Release lock before calling close_trade to avoid deadlock
+                    pass
+
+        # Now close trades outside the lock
         for trade_id, managed in list(self.managed_trades.items()):
             if pairs is None or managed.trade.pair in pairs:
                 result = self.close_trade(trade_id, reason=reason)
                 results.append(result)
-        
+
         return results
     
     def emergency_close_all(
@@ -636,13 +694,13 @@ class TradeManager:
             )
         
         results = []
-        
+
         # Close via broker positions (more reliable than individual trades)
         positions = self.broker.get_positions()
-        
+
         for position in positions:
             success = self.broker.close_position(position.pair)
-            
+
             results.append(TradeManagementResult(
                 trade_id=f"position_{position.pair}",
                 action=TradeAction.EMERGENCY_CLOSE,
@@ -650,14 +708,15 @@ class TradeManager:
                 details=f"Emergency close {position.pair}",
                 pnl=position.unrealized_pnl
             ))
-            
+
             if success:
                 self.logger.info(f"Emergency closed {position.pair}")
             else:
                 self.logger.error(f"Failed to emergency close {position.pair}")
-        
+
         # Clear managed trades
-        self.managed_trades.clear()
+        with self._lock:
+            self.managed_trades.clear()
         self._save_state()
         
         return results
@@ -699,8 +758,10 @@ class TradeManager:
 
     def get_managed_trade(self, trade_id: str) -> Optional[ManagedTrade]:
         """Get a managed trade by ID."""
-        return self.managed_trades.get(trade_id)
-    
+        with self._lock:
+            return self.managed_trades.get(trade_id)
+
     def list_managed_trades(self) -> List[ManagedTrade]:
         """Get list of all managed trades."""
-        return list(self.managed_trades.values())
+        with self._lock:
+            return list(self.managed_trades.values())

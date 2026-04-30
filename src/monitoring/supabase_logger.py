@@ -9,6 +9,7 @@ Dev usage:     Supabase MCP server (separate setup, not required for runtime)
 
 import logging
 import os
+from typing import List, Optional
 
 _logger = logging.getLogger('supabase_logger')
 
@@ -33,10 +34,58 @@ class SupabaseTradeLogger:
 
     def log_closed_trade(self, data: dict) -> None:
         """Insert a closed trade row.  Non-fatal — logs warning on failure."""
+        self.insert_trade(data)
+
+    def _normalize_fields(self, data: dict) -> dict:
+        """Normalize field names to match Supabase table schema."""
+        field_mapping = {
+            'direction': 'side',
+            'entry_time': 'open_time',
+            'pnl': 'realized_pnl',
+            'pnl_pips': 'pips_gained'
+        }
+
+        normalized = {}
+        for key, value in data.items():
+            # Use mapped name if exists, otherwise keep original
+            normalized_key = field_mapping.get(key, key)
+            normalized[normalized_key] = value
+
+        return normalized
+
+    def insert_trade(self, data: dict) -> None:
+        """Insert a trade row. Non-fatal — logs warning on failure."""
         try:
-            self._client.table('trades').insert(data).execute()
+            normalized_data = self._normalize_fields(data)
+            self._client.table('trades').insert(normalized_data).execute()
         except Exception as exc:
             _logger.warning(f"Supabase insert failed: {exc}")
+
+    def update_trade(self, trade_id: str, data: dict) -> None:
+        """Update a trade row by trade_id. Non-fatal — logs warning on failure."""
+        try:
+            normalized_data = self._normalize_fields(data)
+            self._client.table('trades').update(normalized_data).eq('trade_id', trade_id).execute()
+        except Exception as exc:
+            _logger.warning(f"Supabase update failed for trade {trade_id}: {exc}")
+
+    def get_trade(self, trade_id: str) -> Optional[dict]:
+        """Get a trade by trade_id. Returns None if not found or on error."""
+        try:
+            response = self._client.table('trades').select('*').eq('trade_id', trade_id).execute()
+            return response.data[0] if response.data else None
+        except Exception as exc:
+            _logger.warning(f"Supabase query failed for trade {trade_id}: {exc}")
+            return None
+
+    def get_recent_trades(self, limit: int = 10) -> List[dict]:
+        """Get recent trades ordered by close_time DESC."""
+        try:
+            response = self._client.table('trades').select('*').order('close_time', desc=True).limit(limit).execute()
+            return response.data
+        except Exception as exc:
+            _logger.warning(f"Supabase query failed for recent trades: {exc}")
+            return []
 
 
 def create_supabase_logger() -> 'SupabaseTradeLogger | None':

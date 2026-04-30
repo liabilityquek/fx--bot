@@ -1,10 +1,10 @@
-"""LLMAgent — Groq (primary) + Anthropic (fallback) analyst synthesizer.
+"""LLMAgent — Groq (primary) + NVIDIA (fallback) + Anthropic (fallback) analyst synthesizer.
 
 Provider priority:
   1. Groq  (llama-3.3-70b-versatile by default)
-  2. Anthropic  (claude-haiku-4-5-20251001 by default) — activates when Groq
-     credits are exhausted.
-  3. HOLD fallback — when both providers are credit-exhausted; DecisionEngine
+  2. NVIDIA (nvidia_nim/z-ai/glm4.7 by default) — activates when Groq credits are exhausted
+  3. Anthropic  (claude-haiku-4-5-20251001 by default) — activates when NVIDIA credits are exhausted
+  4. HOLD fallback — when all providers are credit-exhausted; DecisionEngine
      fires a Telegram alert at this point.
 
 Receives a merged indicators dict (from TechAgent/TrendAgent/MomentumAgent)
@@ -41,7 +41,7 @@ _SYSTEM_PROMPT = (
 
 
 class LLMAgent:
-    """Synthesizer agent: Groq primary, Anthropic fallback on credit exhaustion."""
+    """Synthesizer agent: Groq primary, NVIDIA fallback, Anthropic fallback on credit exhaustion."""
 
     def __init__(self, logger: Optional[logging.Logger] = None):
         self.logger = logger or logging.getLogger("LLMAgent")
@@ -51,12 +51,18 @@ class LLMAgent:
         self._groq_model: str = ""
         self._groq_exhausted: bool = False
 
+        # NVIDIA state
+        self._nvidia_client: Optional[OpenAI] = None
+        self._nvidia_model: str = ""
+        self._nvidia_exhausted: bool = False
+
         # Anthropic state
         self._anthropic_client = None
         self._anthropic_model: str = ""
         self._anthropic_exhausted: bool = False
 
         self._init_groq()
+        self._init_nvidia()
         self._init_anthropic()
 
     # ------------------------------------------------------------------
@@ -82,6 +88,27 @@ class LLMAgent:
         except Exception as exc:
             self.logger.warning(f"LLMAgent: Groq init failed: {exc}")
             self._groq_exhausted = True
+
+    def _init_nvidia(self) -> None:
+        """NVIDIA fallback — activates when Groq credits are exhausted."""
+        try:
+            from config.settings import settings
+            if not settings.NVIDIA_API_KEY:
+                self.logger.info("NVIDIA_API_KEY not set — NVIDIA fallback disabled")
+                self._nvidia_exhausted = True
+                return
+            self._nvidia_client = OpenAI(
+                api_key=settings.NVIDIA_API_KEY,
+                base_url="https://integrate.api.nvidia.com/v1",
+            )
+            self._nvidia_model = settings.NVIDIA_LLM_MODEL
+            self.logger.info(f"LLMAgent: NVIDIA fallback ready ({self._nvidia_model})")
+        except ImportError:
+            self.logger.info("openai package not installed — NVIDIA fallback disabled")
+            self._nvidia_exhausted = True
+        except Exception as exc:
+            self.logger.warning(f"LLMAgent: NVIDIA init failed: {exc}")
+            self._nvidia_exhausted = True
 
     def _init_anthropic(self) -> None:
         try:
@@ -114,18 +141,20 @@ class LLMAgent:
     @property
     def is_available(self) -> bool:
         """True if at least one provider can still service requests."""
-        return not (self._groq_exhausted and self._anthropic_exhausted)
+        return not (self._groq_exhausted and self._nvidia_exhausted and self._anthropic_exhausted)
 
     @property
     def both_exhausted(self) -> bool:
-        """True when both Groq and Anthropic credits are exhausted."""
-        return self._groq_exhausted and self._anthropic_exhausted
+        """True when all providers are exhausted."""
+        return self._groq_exhausted and self._nvidia_exhausted and self._anthropic_exhausted
 
     @property
     def active_provider(self) -> str:
         """Human-readable name of the currently active provider."""
         if not self._groq_exhausted:
             return "groq"
+        if not self._nvidia_exhausted:
+            return "nvidia"
         if not self._anthropic_exhausted:
             return "anthropic"
         return "none"
@@ -204,6 +233,26 @@ class LLMAgent:
                         reasoning="Groq transient error",
                     )
 
+        # Try NVIDIA fallback
+        if not self._nvidia_exhausted and self._nvidia_client is not None:
+            try:
+                return self._call_nvidia(user_msg, pair)
+            except Exception as exc:
+                if _is_credit_exhausted(exc):
+                    self.logger.warning(
+                        f"LLMAgent: NVIDIA credits exhausted — switching to Anthropic. ({exc})"
+                    )
+                    self._nvidia_exhausted = True
+                else:
+                    self.logger.warning(f"LLMAgent: NVIDIA transient error for {pair}: {exc}")
+                    return AgentVote(
+                        agent_name="LLMAgent",
+                        pair=pair,
+                        signal=Signal.HOLD,
+                        confidence=0.5,
+                        reasoning="NVIDIA transient error",
+                    )
+
         # Try Anthropic fallback
         if not self._anthropic_exhausted and self._anthropic_client is not None:
             try:
@@ -211,7 +260,7 @@ class LLMAgent:
             except Exception as exc:
                 if _is_credit_exhausted(exc):
                     self.logger.warning(
-                        f"LLMAgent: Anthropic credits exhausted — both providers down. ({exc})"
+                        f"LLMAgent: Anthropic credits exhausted — all providers down. ({exc})"
                     )
                     self._anthropic_exhausted = True
                 else:
@@ -224,7 +273,7 @@ class LLMAgent:
                         reasoning="Anthropic transient error",
                     )
 
-        # Both exhausted
+        # All exhausted
         return AgentVote(
             agent_name="LLMAgent",
             pair=pair,
@@ -236,6 +285,18 @@ class LLMAgent:
     def _call_groq(self, user_msg: str, pair: str) -> AgentVote:
         response = self._groq_client.chat.completions.create(
             model=self._groq_model,
+            max_tokens=256,
+            messages=[
+                {"role": "system", "content": _SYSTEM_PROMPT},
+                {"role": "user", "content": user_msg},
+            ],
+        )
+        raw_text = response.choices[0].message.content.strip()
+        return _parse_response(raw_text, pair)
+
+    def _call_nvidia(self, user_msg: str, pair: str) -> AgentVote:
+        response = self._nvidia_client.chat.completions.create(
+            model=self._nvidia_model,
             max_tokens=256,
             messages=[
                 {"role": "system", "content": _SYSTEM_PROMPT},

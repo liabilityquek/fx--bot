@@ -163,17 +163,21 @@ class DecisionEngine:
     def get_llm_provider_status(self) -> str:
         """Return human-readable status for both analyst and reviewer providers."""
         groq_ok    = not self._llm._groq_exhausted and self._llm._groq_client is not None
+        nvidia_ok  = not self._llm._nvidia_exhausted and self._llm._nvidia_client is not None
         ant_ok     = not self._llm._anthropic_exhausted and self._llm._anthropic_client is not None
         rev_groq_ok = not self._reviewer._groq_exhausted and self._reviewer._groq_client is not None
+        rev_nvidia_ok = not self._reviewer._nvidia_exhausted and self._reviewer._nvidia_client is not None
         rev_ant_ok  = not self._reviewer._anthropic_exhausted and self._reviewer._anthropic_client is not None
 
         return (
             "=== Analyst ===\n"
             f"Groq: {'active' if groq_ok else 'exhausted / unavailable'}\n"
+            f"NVIDIA: {'active (fallback)' if nvidia_ok else 'exhausted / unavailable'}\n"
             f"Anthropic: {'active (fallback)' if ant_ok else 'exhausted / unavailable'}\n"
             f"Active provider: {self._llm.active_provider}\n\n"
             "=== Reviewer ===\n"
             f"Groq: {'active' if rev_groq_ok else 'exhausted / unavailable'}\n"
+            f"NVIDIA: {'active (fallback)' if rev_nvidia_ok else 'exhausted / unavailable'}\n"
             f"Anthropic: {'active (fallback)' if rev_ant_ok else 'exhausted / unavailable'}\n"
             f"Active provider: {self._reviewer.active_provider}"
         )

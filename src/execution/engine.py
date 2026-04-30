@@ -95,6 +95,11 @@ class TradingEngine:
         self._daily_loss_date: Optional[str] = None
         self._daily_loss_halted: bool = False
 
+        # Monitoring thread
+        self._monitoring_stop_event = threading.Event()
+        self._monitoring_thread = None
+        self._monitoring_cycle_count = 0
+
     # ------------------------------------------------------------------
     # Public interface
     # ------------------------------------------------------------------
@@ -123,6 +128,16 @@ class TradingEngine:
         if self.news_watcher:
             self.news_watcher.start()
 
+        # Start monitoring thread
+        self._monitoring_stop_event = threading.Event()
+        self._monitoring_thread = threading.Thread(
+            target=self._run_monitoring_loop,
+            name="MonitoringThread",
+            daemon=True
+        )
+        self._monitoring_thread.start()
+        self.logger.info("Monitoring thread started")
+
         while not self._stop_event.is_set():
             self._run_cycle()
             self._cycle_count += 1
@@ -139,6 +154,65 @@ class TradingEngine:
         self._stop_event.set()
         if self.news_watcher:
             self.news_watcher.stop()
+
+        # Stop monitoring thread
+        self._monitoring_stop_event.set()
+        if self._monitoring_thread:
+            self._monitoring_thread.join(timeout=5)
+
+    def _run_monitoring_cycle(self) -> None:
+        """High-frequency monitoring cycle for trailing stops, risk checks, and close detection."""
+        cycle_num = self._monitoring_cycle_count + 1
+        self.logger.info(
+            f"Monitoring cycle #{cycle_num} — {datetime.utcnow().strftime('%Y-%m-%d %H:%M:%S')} UTC"
+        )
+
+        # 1. Kill switch check
+        if self.kill_switch and self.kill_switch.is_active():
+            reason = self.kill_switch.get_reason()
+            self.logger.critical(f"KILL SWITCH ACTIVE ({reason}) — skipping monitoring cycle")
+            return
+
+        # 2. Account info
+        account = self.broker.get_account_info()
+        if not account:
+            self.logger.error("Failed to get account info — skipping monitoring cycle")
+            return
+
+        # 3. Update exposure tracker
+        positions = self.broker.get_positions()
+        self.exposure_tracker.update_positions(positions, account.balance)
+
+        # 4. Emergency risk check
+        try:
+            self._run_emergency_check(account, positions)
+        except Exception as exc:
+            self.logger.error(f"Emergency check error: {exc}")
+
+        # 5. Trailing stop updates and age alerts
+        try:
+            self.trade_manager.update_all_trades()
+        except Exception as exc:
+            self.logger.error(f"Trade manager update error: {exc}")
+
+        # 6. Trade close detection
+        try:
+            self._check_closed_trades()
+        except Exception as exc:
+            self.logger.error(f"Trade close detection error: {exc}")
+
+        self._monitoring_cycle_count += 1
+
+    def _run_monitoring_loop(self) -> None:
+        """Background monitoring loop — runs at MONITORING_INTERVAL_SECONDS."""
+        interval = settings.MONITORING_INTERVAL_SECONDS
+        self.logger.info(f"Monitoring loop started | interval={interval}s")
+
+        while not self._monitoring_stop_event.is_set():
+            self._run_monitoring_cycle()
+            self._monitoring_stop_event.wait(interval)
+
+        self.logger.info("Monitoring loop stopped")
 
     def get_status(self) -> str:
         lines = [
@@ -179,6 +253,8 @@ class TradingEngine:
                     f" | P/L: {pnl_sign}${t.unrealized_pnl:.2f}"
                     f" | SL: {sl_str} | TP: {tp_str}"
                 )
+
+        lines.append(f"\nMonitoring cycles: #{self._monitoring_cycle_count}")
 
         return "\n".join(lines)
 
@@ -267,12 +343,6 @@ class TradingEngine:
         positions = self.broker.get_positions()
         self.exposure_tracker.update_positions(positions, account.balance)
 
-        # Layer 3 — Emergency risk check (normal days and holidays)
-        try:
-            self._run_emergency_check(account, positions)
-        except Exception as exc:
-            self.logger.error(f"Emergency check error: {exc}")
-
         # 5. Process each pair (normal days only)
         if not is_holiday:
             self._cycle_pair_prices: dict = {}
@@ -283,18 +353,6 @@ class TradingEngine:
                     self._process_pair(pair, account, positions)
                 except Exception as exc:
                     self.logger.error(f"Error processing {pair}: {exc}")
-
-        # Layer 2 + 6 — Trailing stop updates and age alerts (normal days and holidays)
-        try:
-            self.trade_manager.update_all_trades()
-        except Exception as exc:
-            self.logger.error(f"Trade manager update error: {exc}")
-
-        # Layer 4 — Trade close detection (normal days and holidays)
-        try:
-            self._check_closed_trades()
-        except Exception as exc:
-            self.logger.error(f"Trade close detection error: {exc}")
 
         elapsed = time.time() - cycle_start
         self.logger.info(f"Cycle #{cycle_num} complete in {elapsed:.1f}s")
@@ -576,7 +634,7 @@ class TradingEngine:
                 )
 
                 # Log to Supabase via trade_manager if available
-                managed = self.trade_manager.managed_trades.get(trade_id)
+                managed = self.trade_manager.get_managed_trade(trade_id)
                 if managed and self.trade_manager.supabase_logger:
                     from datetime import timezone as _tz
                     sl = trade.stop_loss
