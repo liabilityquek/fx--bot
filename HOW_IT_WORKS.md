@@ -33,9 +33,10 @@ The bot does this automatically, all day, every day — but with five currency p
 │  3. Runs the numbers (math analysis)            │
 │  4. Asks an AI: "Should I buy or sell?"         │
 │  5. Asks a second AI: "Is this actually safe?"  │
-│  6. Places the trade (if both AIs agree)        │
-│  7. Manages open trades (protects profits)      │
-│  8. Repeats in 1 hour                           │
+│  6. Runs 4 quality checks (confluences, RR...)  │
+│  7. Places the trade (if all checks pass)       │
+│  8. Manages open trades (protects profits)      │
+│  9. Repeats in 1 hour                           │
 └────────────────────────────────────────────────┘
 ```
 
@@ -180,7 +181,58 @@ The reviewer gives one of three verdicts:
 
 ---
 
-### Step 6 — Placing the Trade
+### Step 6 — Quality Filters: "Is This Trade Worth Taking?"
+
+Before committing any capital, the bot runs four deterministic checks on the approved trade idea. These checks are independent of the AI — they use the raw indicator numbers, not the AI's written reasoning.
+
+**Check 1 — Confluence count**
+
+The bot counts how many of the seven technical indicators are pointing in the same direction as the trade:
+
+| Indicator | Long (BUY) condition | Short (SELL) condition |
+|---|---|---|
+| RSI | Below 50 | Above 50 |
+| MACD histogram | Positive | Negative |
+| EMA trend | Bullish (price above EMAs) | Bearish (price below EMAs) |
+| ADX | ≥ 20 (trend exists) | ≥ 20 (trend exists) |
+| Fisher Transform | Negative (near low extreme) | Positive (near high extreme) |
+| Bollinger midline | Price below midline | Price above midline |
+| Market structure | Bullish structure (HH/HL) | Bearish structure (LH/LL) |
+
+If fewer than **3 confluences** are aligned, the trade is rejected. No exceptions.
+
+The Telegram notification when a trade opens now includes the count and named types: `Confluences: 4/3 [MACD, EMA trend, ADX, Fisher]`
+
+**Check 2 — Setup type quality**
+
+Not all trade types are equal. The bot ranks them:
+
+| Setup type | Quality | Min confidence |
+|---|---|---|
+| BREAKOUT | Highest | 60% |
+| PULLBACK | High | 65% |
+| REVERSAL | Medium | 70% |
+| LIQUIDITY_SWEEP | Lower | 75% |
+| RANGE / NONE | Rejected | — |
+
+RANGE trades are never placed. Lower-quality setups require the AI to be more confident before proceeding.
+
+**Check 3 — Risk:reward validation**
+
+The actual SL and TP distances are calculated from ATR. The bot checks: `TP pips ÷ SL pips ≥ 2.0`. If the trade geometry doesn't meet minimum 1:2 risk:reward, it is rejected regardless of how good the signal looks.
+
+**Check 4 — M15 momentum gate**
+
+The last 5 fifteen-minute candles are checked. If short-term momentum clearly contradicts the intended direction (e.g. a SELL signal but the last 5 M15 bars are bullish and rising), the trade is blocked. Ambiguous momentum is allowed through — only clear contradictions are blocked.
+
+```
+All 4 checks pass  →  Proceed to trade placement
+Any check fails    →  Rejected. No trade.
+```
+
+---
+
+### Step 7 — Placing the Trade
 
 If both AIs agree, the bot now figures out exactly how much money to put on the trade.
 
@@ -244,9 +296,9 @@ Max loss on this trade: $200
 
 ---
 
-### Step 7 — Managing Open Trades
+### Step 8 — Managing Open Trades
 
-While a trade is open, the bot checks it every hour in this order:
+While a trade is open, the bot checks it every minute (via a separate background monitoring thread) in this order:
 
 **1. Break-even stop (at +5 pips profit)**
 
@@ -454,6 +506,14 @@ The bot connects to several external services:
            └───────────────┬───────────────┘
                            │ YES
                     ┌──────▼──────────────┐
+                    │ Phase 1 Filters     │
+                    │ Confluences ≥ 3?    │──► NO → No trade.
+                    │ Setup type valid?   │──► NO → No trade.
+                    │ RR ≥ 2.0?          │──► NO → No trade.
+                    │ M15 momentum ok?   │──► NO → No trade.
+                    └──────┬──────────────┘
+                           │ ALL PASS
+                    ┌──────▼──────────────┐
                     │ Calculate Size      │
                     │ (2% risk rule)      │
                     └──────┬──────────────┘
@@ -510,10 +570,12 @@ Its core design principles are:
 1. **Never bet the house** — 2% risk limit per trade, every time
 2. **Always have an exit** — Safety exit is placed at the broker the moment a trade opens
 3. **Two AIs must agree** — One to find the opportunity, one to sanity-check it
-4. **Avoid danger zones** — No new trades around major announcements, and no piling into the same USD direction
-5. **Protect profits in stages** — Break-even at +5 pips, partial close at 1:1, ATR-adaptive trailing stop from +7 pips
-6. **Know when to stop** — Multiple automatic shutdown triggers if things go wrong
-7. **Keep you informed** — Every significant event triggers a Telegram message
+4. **Indicators must back it up** — At least 3 of 7 indicators must align with the direction before any trade is placed (deterministic, not AI-text-dependent)
+5. **Only take quality setups** — RANGE trades never execute; lower-quality setups require higher AI confidence; all trades need minimum 1:2 risk:reward
+6. **Avoid danger zones** — No new trades around major announcements, and no piling into the same USD direction
+7. **Protect profits in stages** — Break-even at +5 pips, partial close at 1:1, ATR-adaptive trailing stop from +7 pips
+8. **Know when to stop** — Multiple automatic shutdown triggers if things go wrong
+9. **Keep you informed** — Every significant event triggers a Telegram message; trade alerts now show named confluences
 
 ---
 

@@ -51,7 +51,12 @@ Every cycle per pair:
    - APPROVED → trade executes
    - ADJUSTED → modified confidence, may drop below threshold → no trade
    - REJECTED → trade blocked
-9. If either AI provider is unavailable → HOLD, Telegram alert fired. Provider hierarchy: Groq (primary) → NVIDIA (fallback) → Anthropic (final fallback) → HOLD
+9. **Phase 1 trade quality filters** (applied after reviewer APPROVED/ADJUSTED):
+   - **Confluence gate** — counts indicator signals aligned with direction (RSI, MACD, EMA trend, ADX, Fisher, Bollinger, Market Structure). Rejects if `confluence_count < MIN_CONFLUENCES` (default 3). Deterministic — reads from indicators dict, not LLM text
+   - **Setup type quality filter** — RANGE and NONE are rejected outright. Lower-quality setups (LIQUIDITY_SWEEP, REVERSAL) require higher minimum confidence
+   - **Minimum RR validation** — rejects if `tp_pips / sl_pips < MIN_RR_RATIO` (default 2.0)
+   - **M15 momentum gate** — rejects if the last 5 × 15-minute candles show momentum clearly contradicting the signal direction
+10. If either AI provider is unavailable → HOLD, Telegram alert fired. Provider hierarchy: Groq (primary) → NVIDIA (fallback) → Anthropic (final fallback) → HOLD
 
 ---
 
@@ -245,6 +250,8 @@ Copy `.env.template` to `.env` and fill in all values before deployment.
 | Variable | Default | Description |
 |----------|---------|-------------|
 | `CONSENSUS_THRESHOLD` | `0.60` | Minimum analyst confidence to proceed to reviewer |
+| `MIN_CONFLUENCES` | `3` | Minimum indicator confluences required to place a trade |
+| `MIN_RR_RATIO` | `2.0` | Minimum risk:reward ratio (tp_pips / sl_pips) to proceed |
 | `MAX_RISK_PER_TRADE` | `0.02` | Max risk per trade as fraction of balance (2%) |
 | `DEFAULT_TAKE_PROFIT_RATIO` | `2.0` | TP = SL distance × this ratio (1:2 RR) |
 | `MAX_DAILY_LOSS_PERCENT` | `0.06` | Daily loss limit before trading halts (6%) |
@@ -291,8 +298,8 @@ To resume: remove the file or send `/resume` via Telegram.
 | `/calhistory` | Past economic events today (last 24h) |
 | `/logs` | Today's bot log entries |
 | `/credits` | LLM analyst + reviewer provider status |
-| `/analyst` | Last analyst decision per pair (signal, confidence, reasoning) |
-| `/reviewer` | Last reviewer verdict per pair (APPROVED/ADJUSTED/REJECTED + reason) |
+| `/analyst` | Last analyst decision per pair (signal, confidence, confluence count + named types, reasoning) |
+| `/reviewer` | Last reviewer verdict per pair (APPROVED/ADJUSTED/REJECTED, confluence count + named types, reason) |
 | `/help` | Show this command list |
 
 ---

@@ -15,7 +15,7 @@ Provider failure behaviour:
 """
 
 import logging
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Dict, List, Optional
 
 from src.agents.base import AgentVote, Signal
@@ -39,6 +39,9 @@ class DecisionResult:
     reviewer_reason: str
     reviewer_available: bool
     setup_type: str = "NONE"
+    indicators: dict = field(default_factory=dict)
+    confluence_count: int = 0
+    confluence_types: list = field(default_factory=list)
 
 
 class DecisionEngine:
@@ -114,6 +117,7 @@ class DecisionEngine:
                 reviewer_reason='LLM HOLD or confidence below threshold',
                 reviewer_available=True,
                 setup_type='NONE',
+                indicators=indicators,
             )
             self._last_results[pair] = result
             return result
@@ -156,6 +160,7 @@ class DecisionEngine:
             reviewer_reason=rev_reason,
             reviewer_available=review.reviewer_available,
             setup_type=llm_vote.setup_type,
+            indicators=indicators,
         )
         self._last_results[pair] = result
         return result
@@ -189,12 +194,18 @@ class DecisionEngine:
 
         lines = ['Analyst History\n']
         for pair, result in self._last_results.items():
+            conf_str = (
+                f"{result.confluence_count}/{settings.MIN_CONFLUENCES} "
+                f"[{', '.join(result.confluence_types)}]"
+                if result.confluence_types else "not yet computed"
+            )
             lines.append(
                 f'{pair}\n'
-                f'  Signal:     {result.final_signal.value}\n'
-                f'  Confidence: {result.confidence:.2f}\n'
-                f'  Reasoning:  {result.llm_reasoning}\n'
-                f'  LLM:        {"available" if result.llm_available else "unavailable"}'
+                f'  Signal:      {result.final_signal.value}\n'
+                f'  Confidence:  {result.confidence:.2f}\n'
+                f'  Confluences: {conf_str}\n'
+                f'  Reasoning:   {result.llm_reasoning}\n'
+                f'  LLM:         {"available" if result.llm_available else "unavailable"}'
             )
         return '\n\n'.join(lines)
 
@@ -214,10 +225,16 @@ class DecisionEngine:
         lines = ['Reviewer History\n']
         for pair, result in self._last_results.items():
             badge = verdict_labels.get(result.reviewer_verdict, result.reviewer_verdict)
+            conf_str = (
+                f"{result.confluence_count}/{settings.MIN_CONFLUENCES} "
+                f"[{', '.join(result.confluence_types)}]"
+                if result.confluence_types else "not yet computed"
+            )
             lines.append(
                 f'{pair}\n'
-                f'  Verdict:    {badge}\n'
-                f'  Confidence: {result.confidence:.2f}\n'
-                f'  Reason:     {result.reviewer_reason}'
+                f'  Verdict:     {badge}\n'
+                f'  Confidence:  {result.confidence:.2f}\n'
+                f'  Confluences: {conf_str}\n'
+                f'  Reason:      {result.reviewer_reason}'
             )
         return '\n\n'.join(lines)

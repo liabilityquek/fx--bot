@@ -433,9 +433,20 @@ class TradingEngine:
             )
             return
 
+        is_long = result.final_signal == Signal.BUY
+
         # Phase 1.1: Confluence validation
-        confluence_count = _extract_confluence_count(result.llm_reasoning)
+        confluence_count, confluence_types = _count_indicator_confluences(
+            result.indicators, is_long, price
+        )
+        result.confluence_count = confluence_count
+        result.confluence_types = confluence_types
         min_confluences = settings.MIN_CONFLUENCES
+        self.logger.info(
+            f"{pair}: confluence check — {confluence_count}/{min_confluences} "
+            f"[{', '.join(confluence_types) if confluence_types else 'none'}] "
+            f"({'PASS' if confluence_count >= min_confluences else 'FAIL'})"
+        )
         if confluence_count < min_confluences:
             self.logger.info(
                 f"{pair}: REJECTED — insufficient confluences "
@@ -461,8 +472,6 @@ class TradingEngine:
             return
 
         # Conflict check — skip if existing position in opposite direction
-        is_long = result.final_signal == Signal.BUY
-
         for pos in positions:
             if pos.pair == pair and not pos.is_flat:
                 if (is_long and pos.is_short) or (not is_long and pos.is_long):
@@ -804,6 +813,8 @@ class TradingEngine:
             f"{prefix}TRADE OPENED -- {pair}",
             f"Direction: {result.final_signal.value}",
             f"Setup: {result.setup_type}",
+            f"Confluences: {result.confluence_count}/{settings.MIN_CONFLUENCES} "
+            f"[{', '.join(result.confluence_types)}]",
             f"Entry: {entry_price:.5f}",
             f"SL: {stop_loss:.5f} | TP: {take_profit:.5f}",
             f"Size: {units / 100_000:.2f} lots",
@@ -921,48 +932,63 @@ def _m15_momentum_aligned(m15_candles: list, is_long: bool) -> bool:
         return not (bullish > bearish and net_move > 0)
 
 
-def _extract_confluence_count(llm_reasoning: str) -> int:
+def _count_indicator_confluences(
+    indicators: dict, is_long: bool, price: float
+) -> tuple:
     """
-    Extract confluence count from LLM reasoning string.
-
-    Looks for patterns like:
-    - "3 confluences"
-    - "confluence: 3"
-    - "3 factors"
-    - "3 reasons"
-
-    Returns 0 if no confluence count found.
+    Count indicator signals aligned with the trade direction.
+    Returns (count, [list of confluence names]).
+    Max 7 confluences: RSI, MACD, EMA trend, ADX, Fisher, Bollinger, Market Structure
     """
-    if not llm_reasoning:
-        return 0
+    aligned = []
 
-    import re
+    rsi_val = indicators.get('rsi')
+    if rsi_val is not None:
+        if is_long and rsi_val < 50:
+            aligned.append('RSI')
+        elif not is_long and rsi_val > 50:
+            aligned.append('RSI')
 
-    # Try to find explicit confluence count
-    patterns = [
-        r'(\d+)\s*confluence',
-        r'confluence[:\s]*(\d+)',
-        r'(\d+)\s*factors?',
-        r'(\d+)\s*reasons?',
-    ]
+    macd_hist = indicators.get('macd_hist')
+    if macd_hist is not None:
+        if is_long and macd_hist > 0:
+            aligned.append('MACD')
+        elif not is_long and macd_hist < 0:
+            aligned.append('MACD')
 
-    for pattern in patterns:
-        match = re.search(pattern, llm_reasoning, re.IGNORECASE)
-        if match:
-            try:
-                return int(match.group(1))
-            except (ValueError, IndexError):
-                continue
+    trend = indicators.get('trend')
+    if trend is not None:
+        if is_long and trend == 'bullish':
+            aligned.append('EMA trend')
+        elif not is_long and trend == 'bearish':
+            aligned.append('EMA trend')
 
-    # If no explicit count found, estimate from reasoning length
-    # This is a fallback - longer reasoning typically indicates more factors
-    word_count = len(llm_reasoning.split())
-    if word_count > 100:
-        return 3  # Assume at least 3 confluences for detailed reasoning
-    elif word_count > 50:
-        return 2
-    else:
-        return 1
+    adx_val = indicators.get('adx')
+    if adx_val is not None and adx_val >= 20:
+        aligned.append('ADX')
+
+    fisher_val = indicators.get('fisher')
+    if fisher_val is not None:
+        if is_long and fisher_val < 0:
+            aligned.append('Fisher')
+        elif not is_long and fisher_val > 0:
+            aligned.append('Fisher')
+
+    bb_mid = indicators.get('bb_mid')
+    if bb_mid is not None and price > 0:
+        if is_long and price < bb_mid:
+            aligned.append('Bollinger')
+        elif not is_long and price > bb_mid:
+            aligned.append('Bollinger')
+
+    ms = indicators.get('market_structure')
+    if ms is not None:
+        if is_long and ms == 'bullish_structure':
+            aligned.append('Market Structure')
+        elif not is_long and ms == 'bearish_structure':
+            aligned.append('Market Structure')
+
+    return len(aligned), aligned
 
 
 def _get_setup_quality_score(setup_type: str) -> int:
