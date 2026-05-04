@@ -95,6 +95,9 @@ class TradingEngine:
         self._daily_loss_date: Optional[str] = None
         self._daily_loss_halted: bool = False
 
+        # Holiday alert dedup
+        self._holiday_alert_sent_date: Optional[str] = None
+
         # Monitoring thread
         self._monitoring_stop_event = threading.Event()
         self._monitoring_thread = None
@@ -297,11 +300,14 @@ class TradingEngine:
         if self.holiday_guard and not self.holiday_guard.is_safe_to_trade():
             is_holiday = True
             self.logger.warning("Holiday guard: market holiday detected — new trades blocked")
-            self.alert_manager._send_telegram(
-                "Market holiday detected. New trades blocked for today. "
-                "Existing positions remain open and are protected by broker SL/TP.",
-                parse_mode=''
-            )
+            today_str = datetime.utcnow().strftime('%Y-%m-%d')
+            if self._holiday_alert_sent_date != today_str:
+                self._holiday_alert_sent_date = today_str
+                self.alert_manager._send_telegram(
+                    "Market holiday detected. New trades blocked for today. "
+                    "Existing positions remain open and are protected by broker SL/TP.",
+                    parse_mode=''
+                )
 
         # 4. Account info
         account = self.broker.get_account_info()
@@ -914,7 +920,7 @@ def _m15_momentum_aligned(m15_candles: list, is_long: bool) -> bool:
     """
     recent = m15_candles[-5:] if len(m15_candles) >= 5 else m15_candles
     if len(recent) < 3:
-        return False  # not enough data — don't risk it
+        return True  # insufficient data — ambiguous, allow per design
 
     bullish = sum(
         1 for c in recent
@@ -947,9 +953,9 @@ def _count_indicator_confluences(
 
     rsi_val = indicators.get('rsi')
     if rsi_val is not None:
-        if is_long and rsi_val < 50:
+        if is_long and rsi_val > 50:
             aligned.append('RSI')
-        elif not is_long and rsi_val > 50:
+        elif not is_long and rsi_val < 50:
             aligned.append('RSI')
 
     macd_hist = indicators.get('macd_hist')

@@ -232,10 +232,10 @@ class ReviewerAgent:
             self.logger.warning(f'ReviewerAgent review failed for {pair}: {exc}')
             # Unexpected outer exception — pass through rather than block
             return ReviewResult(
-                verdict=ReviewVerdict.APPROVED,
-                adjusted_confidence=analyst_vote.confidence,
-                reason='Reviewer unexpected error — passing through',
-                reviewer_available=True,
+                verdict=ReviewVerdict.REJECTED,
+                adjusted_confidence=0.0,
+                reason='Reviewer unexpected error — trade blocked for safety',
+                reviewer_available=False,
             )
 
     # ------------------------------------------------------------------

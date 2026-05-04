@@ -77,6 +77,7 @@ class NewsWatcher:
 
     def _check(self) -> None:
         from config.settings import settings
+        self._evaluated.clear()
 
         imminent = self.event_monitor.get_imminent_events(
             minutes=settings.NEWS_RISK_MINUTES_BEFORE,
@@ -147,7 +148,7 @@ class NewsWatcher:
             )
             return
 
-        if success:
+        if success.success:
             self.on_trade_closed_fn(trade.trade_id)
             msg = (
                 f"NEWS RISK CLOSE -- {trade.pair}\n"

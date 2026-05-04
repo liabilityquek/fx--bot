@@ -222,18 +222,18 @@ class OandaBroker(BaseBroker):
             response = self._with_retry(lambda: self.api.request(endpoint))
             
             position_list = []
-            
+            all_trades = self.get_open_trades()
+
             for pos_data in response.get('positions', []):
                 # OANDA separates long and short positions
                 long_units = int(float(pos_data.get('long', {}).get('units', 0)))
                 short_units = int(float(pos_data.get('short', {}).get('units', 0)))
                 net_units = long_units + short_units  # short_units will be negative
-                
+
                 if net_units == 0:
                     continue  # Skip flat positions
-                
+
                 # Get trades for this position
-                all_trades = self.get_open_trades()
                 position_trades = [t for t in all_trades if t.pair == pos_data['instrument']]
                 
                 # Calculate average price
@@ -309,8 +309,8 @@ class OandaBroker(BaseBroker):
                 accountID=self.account_id,
                 data=order_spec
             )
-            response = self.api.request(endpoint)
-            
+            response = self._with_retry(lambda: self.api.request(endpoint))
+
             # Extract trade ID from response
             if 'orderFillTransaction' in response:
                 trade_opened = response['orderFillTransaction'].get('tradeOpened')
@@ -455,13 +455,6 @@ class OandaBroker(BaseBroker):
     ) -> bool:
         """Modify stop loss and/or take profit for a trade."""
         try:
-            # Get current trade details
-            endpoint_details = trades.TradeDetails(
-                accountID=self.account_id,
-                tradeID=trade_id
-            )
-            trade_data = self.api.request(endpoint_details)
-
             # Modify stop loss
             if stop_loss is not None:
                 sl_spec = {

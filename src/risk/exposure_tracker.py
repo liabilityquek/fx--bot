@@ -175,10 +175,10 @@ class ExposureTracker:
             
             # Quote currency has opposite exposure
             if is_long:
-                currency_data[quote_currency]['short_units'] += abs_units * (current_price or 1.0)
+                currency_data[quote_currency]['short_units'] += abs_units
                 currency_data[quote_currency]['short_value_usd'] += value_usd
             else:
-                currency_data[quote_currency]['long_units'] += abs_units * (current_price or 1.0)
+                currency_data[quote_currency]['long_units'] += abs_units
                 currency_data[quote_currency]['long_value_usd'] += value_usd
         
         # Build currency exposure objects

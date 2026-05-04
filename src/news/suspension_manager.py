@@ -3,7 +3,7 @@
 import logging
 from typing import Dict, Optional, Set
 from dataclasses import dataclass
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from enum import Enum
 
 from .event_monitor import EventMonitor, EconomicEvent, EventImpact
@@ -227,7 +227,7 @@ class SuspensionManager:
     
     def _check_resume(self):
         """Check if suspended pairs should resume trading."""
-        now = datetime.now()
+        now = datetime.now(timezone.utc)
         pairs_to_resume = set()
         
         for pair, event in list(self.suspension_events.items()):

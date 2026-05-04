@@ -347,6 +347,21 @@ class TradeManager:
                         self.logger.info(f"Restored persisted state for trade {trade_id}")
                     self.managed_trades[trade_id] = managed
 
+                    # Re-apply SL at broker if trade has none (e.g. restart after crash)
+                    if trade.stop_loss is None:
+                        recovered_sl = persisted.get('initial_sl') or managed.initial_sl
+                        if recovered_sl is not None:
+                            self.logger.warning(
+                                f"Trade {trade_id} ({trade.pair}) has no SL at broker — "
+                                f"re-applying recovered SL {recovered_sl:.5f}"
+                            )
+                            try:
+                                self.broker.modify_trade(trade_id, trade.pair, stop_loss=recovered_sl)
+                            except Exception as _exc:
+                                self.logger.error(
+                                    f"Failed to re-apply SL for trade {trade_id}: {_exc}"
+                                )
+
             for trade_id, managed in list(self.managed_trades.items()):
                 # Update price tracking for trailing stops
                 self._update_price_tracking(managed)
@@ -555,11 +570,11 @@ class TradeManager:
                 self.logger.info(
                     f"Break-even set after partial TP for {trade.trade_id}: SL -> {new_sl:.5f}"
                 )
+                managed.break_even_triggered = True
             else:
                 self.logger.warning(
                     f"Partial TP: could not move SL to break-even for {trade.trade_id}"
                 )
-            managed.break_even_triggered = True
             self.logger.info(
                 f"Partial TP: {trade.pair} trade {trade.trade_id} — "
                 f"closed {units_to_close} units at ~{profit_pips:.1f} pips profit"
@@ -599,7 +614,7 @@ class TradeManager:
 
         result = self.broker.close_trade(trade_id)
 
-        if result:
+        if result.success:
             realized_pnl = result.realized_pnl
             close_price = result.close_price
 
@@ -637,8 +652,8 @@ class TradeManager:
                     f"Trade closed: {trade_id} | {managed.trade.pair} "
                     f"{managed.trade.side.value.upper()} | "
                     f"Entry: {entry:.5f} | "
-                    f"SL: {sl:.5f} (-{sl_pips:.1f} pips) | "
-                    f"TP: {tp:.5f} (+{tp_pips:.1f} pips) | "
+                    f"SL: {f'{sl:.5f}' if sl is not None else 'N/A'} (-{sl_pips:.1f} pips) | "
+                    f"TP: {f'{tp:.5f}' if tp is not None else 'N/A'} (+{tp_pips:.1f} pips) | "
                     f"Close: {close_price:.5f} ({pips:+.1f} pips) | "
                     f"P/L: ${realized_pnl:+.2f} | {reason_label}"
                 )
