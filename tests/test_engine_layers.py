@@ -255,8 +255,8 @@ class TestPublicHoliday(unittest.TestCase):
     # Holiday alert sent to Telegram
     def test_holiday_telegram_alert_sent(self):
         self.engine._run_cycle()
-        self.engine.alert_manager.alert_error.assert_called()
-        msg = self.engine.alert_manager.alert_error.call_args[0][0]
+        self.engine.alert_manager._send_telegram.assert_called()
+        msg = self.engine.alert_manager._send_telegram.call_args[0][0]
         self.assertIn("Market holiday", msg)
 
     # Exposure tracker still updated on holiday

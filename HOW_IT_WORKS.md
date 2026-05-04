@@ -64,7 +64,7 @@ Before doing anything, the bot checks whether it's even allowed to trade right n
 **Why these checks matter:**
 - The **Kill Switch** is an emergency off button. You can trigger it by sending `/stop` on Telegram, and the bot freezes immediately.
 - **Weekends**: Currency markets are mostly closed over the weekend. Opening a trade on Friday evening and coming back Monday to a big surprise is risky — so the bot does not open new trades from Friday 7 PM to Sunday 10 PM (London time).
-- **Holidays**: Same idea — thin market days are skipped.
+- **Holidays**: On weekday market holidays (Good Friday, Christmas, etc.) liquidity dries up and spreads widen unpredictably — new trades are skipped. Weekends are handled by the weekend guard above; the holiday guard only triggers on actual weekday closures.
 - **Daily loss limit**: If the account is already down 6% today, the bot stops opening new trades. Existing ones stay protected, but no new bets.
 
 ---
@@ -219,7 +219,7 @@ RANGE trades are never placed. Lower-quality setups require the AI to be more co
 
 **Check 3 — Risk:reward validation**
 
-The actual SL and TP distances are calculated from ATR. The bot checks: `TP pips ÷ SL pips ≥ 2.0`. If the trade geometry doesn't meet minimum 1:2 risk:reward, it is rejected regardless of how good the signal looks.
+The actual SL and TP distances are calculated from ATR. The bot checks: `TP pips ÷ SL pips ≥ 2.5`. If the trade geometry doesn't meet minimum 1:2.5 risk:reward, it is rejected regardless of how good the signal looks.
 
 **Check 4 — M15 momentum gate**
 
@@ -306,7 +306,7 @@ Once a trade is 5 pips in profit, the bot moves the safety exit to your entry pr
 
 **2. Partial take-profit (at 1:1 risk/reward)**
 
-Once profit equals the original risk (e.g. if you risked 100 pips, once you're +100 pips), the bot closes half the position and pockets that profit. The other half stays open to ride toward the full target. At this point, the safety exit is already at break-even — so the remaining half is a free trade.
+Once profit equals the original risk (e.g. if you risked 100 pips, once you're +100 pips), the bot closes half the position and pockets that profit. It also immediately moves the safety exit to your entry price + 1 pip. The remaining half now rides toward the full target with zero downside — it cannot result in a loss.
 
 **3. Trailing protection (at +7 pips profit)**
 
@@ -509,7 +509,7 @@ The bot connects to several external services:
                     │ Phase 1 Filters     │
                     │ Confluences ≥ 3?    │──► NO → No trade.
                     │ Setup type valid?   │──► NO → No trade.
-                    │ RR ≥ 2.0?          │──► NO → No trade.
+                    │ RR ≥ 2.5?          │──► NO → No trade.
                     │ M15 momentum ok?   │──► NO → No trade.
                     └──────┬──────────────┘
                            │ ALL PASS
@@ -571,7 +571,7 @@ Its core design principles are:
 2. **Always have an exit** — Safety exit is placed at the broker the moment a trade opens
 3. **Two AIs must agree** — One to find the opportunity, one to sanity-check it
 4. **Indicators must back it up** — At least 3 of 7 indicators must align with the direction before any trade is placed (deterministic, not AI-text-dependent)
-5. **Only take quality setups** — RANGE trades never execute; lower-quality setups require higher AI confidence; all trades need minimum 1:2 risk:reward
+5. **Only take quality setups** — RANGE trades never execute; lower-quality setups require higher AI confidence; all trades need minimum 1:2.5 risk:reward
 6. **Avoid danger zones** — No new trades around major announcements, and no piling into the same USD direction
 7. **Protect profits in stages** — Break-even at +5 pips, partial close at 1:1, ATR-adaptive trailing stop from +7 pips
 8. **Know when to stop** — Multiple automatic shutdown triggers if things go wrong

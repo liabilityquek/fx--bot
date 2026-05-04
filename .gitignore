@@ -3,6 +3,7 @@
 
 # Claude
 claude.md
+.claude-flow
 
 # Python
 __pycache__/

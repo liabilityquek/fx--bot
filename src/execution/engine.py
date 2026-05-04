@@ -296,9 +296,10 @@ class TradingEngine:
         if self.holiday_guard and not self.holiday_guard.is_safe_to_trade():
             is_holiday = True
             self.logger.warning("Holiday guard: market holiday detected — new trades blocked")
-            self.alert_manager.alert_error(
+            self.alert_manager._send_telegram(
                 "Market holiday detected. New trades blocked for today. "
-                "Existing positions remain open and are protected by broker SL/TP."
+                "Existing positions remain open and are protected by broker SL/TP.",
+                parse_mode=''
             )
 
         # 4. Account info
@@ -700,7 +701,8 @@ class TradingEngine:
 
                 # Log to Supabase via trade_manager if available
                 managed = self.trade_manager.get_managed_trade(trade_id)
-                if managed and self.trade_manager.supabase_logger:
+                if managed and self.trade_manager.supabase_logger and not managed.supabase_close_logged:
+                    managed.supabase_close_logged = True
                     from datetime import timezone as _tz
                     sl = trade.stop_loss
                     tp = trade.take_profit

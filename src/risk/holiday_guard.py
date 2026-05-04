@@ -79,6 +79,11 @@ class HolidayGuard:
             return False
 
         today = (now or datetime.now(tz=timezone.utc)).date()
+        # Weekends are not holidays — they are handled by the engine weekend guard.
+        # The holiday guard only needs to catch weekday NYSE closures (Good Friday, Christmas, etc.)
+        if today.weekday() >= 5:  # Saturday=5, Sunday=6
+            return False
+
         try:
             is_session = self._calendar.is_session(today.isoformat())
             is_holiday = not is_session

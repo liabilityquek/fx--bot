@@ -54,7 +54,7 @@ Every cycle per pair:
 9. **Phase 1 trade quality filters** (applied after reviewer APPROVED/ADJUSTED):
    - **Confluence gate** — counts indicator signals aligned with direction (RSI, MACD, EMA trend, ADX, Fisher, Bollinger, Market Structure). Rejects if `confluence_count < MIN_CONFLUENCES` (default 3). Deterministic — reads from indicators dict, not LLM text
    - **Setup type quality filter** — RANGE and NONE are rejected outright. Lower-quality setups (LIQUIDITY_SWEEP, REVERSAL) require higher minimum confidence
-   - **Minimum RR validation** — rejects if `tp_pips / sl_pips < MIN_RR_RATIO` (default 2.0)
+   - **Minimum RR validation** — rejects if `tp_pips / sl_pips < MIN_RR_RATIO` (default 2.5)
    - **M15 momentum gate** — rejects if the last 5 × 15-minute candles show momentum clearly contradicting the signal direction
 10. If either AI provider is unavailable → HOLD, Telegram alert fired. Provider hierarchy: Groq (primary) → NVIDIA (fallback) → Anthropic (final fallback) → HOLD
 
@@ -98,7 +98,7 @@ Trades are closed under the following conditions:
 | **Stop Loss** | Broker-side order. SL distance = adaptive ATR multiplier × ATR. Multiplier is 1.5× (quiet market), 2.0× (normal), or 3.0× (high volatility) — chosen by comparing current ATR against the 50-bar ATR average. Fallback to `DEFAULT_STOP_LOSS_PIPS` if ATR unavailable |
 | **Take Profit** | Broker-side order. TP = `SL distance × DEFAULT_TAKE_PROFIT_RATIO` (default 2.0 = 1:2 RR) |
 | **Break-even stop** | At `BREAK_EVEN_ACTIVATION_PIPS` (default 5) profit → SL moves to entry + `BREAK_EVEN_BUFFER_PIPS` (default 1). Triggered once per trade |
-| **Partial take-profit** | At 1:1 RR (`PARTIAL_TP_RR_TARGET=1.0`) → closes `PARTIAL_TP_RATIO` (default 50%) of position. Remainder rides to full TP. Disable with `PARTIAL_TP_ENABLED=false` |
+| **Partial take-profit** | At 1:1 RR (`PARTIAL_TP_RR_TARGET=1.0`) → closes `PARTIAL_TP_RATIO` (default 50%) of position and immediately moves SL to break-even. Remainder rides to full TP as a zero-risk trade. Disable with `PARTIAL_TP_ENABLED=false` |
 | **Trailing stop** | Activates after `TRAILING_STOP_ACTIVATION_PIPS` (default 7) pips profit; trails ATR × 1.5 in price behind the peak (ATR stored at trade entry). Falls back to `TRAILING_STOP_DISTANCE_PIPS` × pip size if ATR unavailable. State persisted to `data/managed_trades.json` — survives restarts |
 | **Trade age alert** | Fires after 72 market hours open (weekends Fri 22:00–Sun 22:00 UTC excluded) |
 | **Exposure breach** | Total exposure >150% of `MAX_TOTAL_EXPOSURE` → emergency close all |
@@ -251,7 +251,7 @@ Copy `.env.template` to `.env` and fill in all values before deployment.
 |----------|---------|-------------|
 | `CONSENSUS_THRESHOLD` | `0.60` | Minimum analyst confidence to proceed to reviewer |
 | `MIN_CONFLUENCES` | `3` | Minimum indicator confluences required to place a trade |
-| `MIN_RR_RATIO` | `2.0` | Minimum risk:reward ratio (tp_pips / sl_pips) to proceed |
+| `MIN_RR_RATIO` | `2.5` | Minimum risk:reward ratio (tp_pips / sl_pips) to proceed |
 | `MAX_RISK_PER_TRADE` | `0.02` | Max risk per trade as fraction of balance (2%) |
 | `DEFAULT_TAKE_PROFIT_RATIO` | `2.0` | TP = SL distance × this ratio (1:2 RR) |
 | `MAX_DAILY_LOSS_PERCENT` | `0.06` | Daily loss limit before trading halts (6%) |
@@ -318,7 +318,7 @@ EUR/USD, GBP/USD, USD/JPY, USD/CHF, AUD/USD — H1 timeframe only.
 - Docker container runs as non-root (`botuser`, UID 1000)
 - Three-layer kill switch available at all times
 - Weekend guard blocks trading from Friday 21:00 UTC to Sunday 22:00 UTC
-- Holiday guard blocks new trades on major FX market holidays (NYSE calendar proxy)
+- Holiday guard blocks new trades on weekday FX market holidays (NYSE calendar proxy — Good Friday, Christmas, etc.). Weekends are handled separately by the weekend guard, not the holiday guard
 
 ---
 

@@ -82,6 +82,7 @@ class ManagedTrade:
     setup_type: str = "NONE"
     reviewer_verdict: str = ""
     reviewer_reason: str = ""
+    supabase_close_logged: bool = False
 
     @property
     def age_hours(self) -> float:
@@ -436,6 +437,22 @@ class TradeManager:
             should_update = True
         
         if should_update:
+            # Validate new_sl does not cross take_profit
+            if trade.take_profit:
+                buffer_price = 2 * pip_size
+                if trade.is_long and new_sl >= trade.take_profit - buffer_price:
+                    self.logger.warning(
+                        f"Trailing SL {new_sl:.5f} would cross TP {trade.take_profit:.5f} "
+                        f"for {trade.trade_id} — clamping"
+                    )
+                    new_sl = trade.take_profit - buffer_price
+                elif not trade.is_long and new_sl <= trade.take_profit + buffer_price:
+                    self.logger.warning(
+                        f"Trailing SL {new_sl:.5f} would cross TP {trade.take_profit:.5f} "
+                        f"for {trade.trade_id} — clamping"
+                    )
+                    new_sl = trade.take_profit + buffer_price
+
             success = self.broker.modify_trade(
                 trade_id=trade.trade_id,
                 pair=trade.pair,
@@ -525,7 +542,24 @@ class TradeManager:
         success = self.broker.partial_close_trade(trade.trade_id, units_to_close)
         if success:
             managed.partial_tp_triggered = True
-            managed.break_even_triggered = True  # Move to break-even simultaneously
+            # Immediately move SL to break-even — do NOT rely on _check_break_even()
+            # because the flag we're about to set will make it skip this trade forever.
+            buffer = self.break_even_buffer_pips * pip_size
+            new_sl = trade.entry_price + buffer if trade.is_long else trade.entry_price - buffer
+            sl_moved = self.broker.modify_trade(
+                trade_id=trade.trade_id,
+                pair=trade.pair,
+                stop_loss=new_sl,
+            )
+            if sl_moved:
+                self.logger.info(
+                    f"Break-even set after partial TP for {trade.trade_id}: SL -> {new_sl:.5f}"
+                )
+            else:
+                self.logger.warning(
+                    f"Partial TP: could not move SL to break-even for {trade.trade_id}"
+                )
+            managed.break_even_triggered = True
             self.logger.info(
                 f"Partial TP: {trade.pair} trade {trade.trade_id} — "
                 f"closed {units_to_close} units at ~{profit_pips:.1f} pips profit"
@@ -621,7 +655,8 @@ class TradeManager:
                         reason=reason_label,
                     )
 
-                if self.supabase_logger:
+                if self.supabase_logger and not managed.supabase_close_logged:
+                    managed.supabase_close_logged = True
                     self.supabase_logger.update_trade(trade_id, {
                         'close_price': close_price,
                         'pips_gained': round(pips, 1),
@@ -670,19 +705,14 @@ class TradeManager:
             List of results
         """
         results = []
-
         with self._lock:
-            for trade_id, managed in list(self.managed_trades.items()):
-                if pairs is None or managed.trade.pair in pairs:
-                    # Release lock before calling close_trade to avoid deadlock
-                    pass
-
-        # Now close trades outside the lock
-        for trade_id, managed in list(self.managed_trades.items()):
-            if pairs is None or managed.trade.pair in pairs:
-                result = self.close_trade(trade_id, reason=reason)
-                results.append(result)
-
+            snapshot = [
+                trade_id for trade_id, managed in self.managed_trades.items()
+                if pairs is None or managed.trade.pair in pairs
+            ]
+        for trade_id in snapshot:
+            result = self.close_trade(trade_id, reason=reason)
+            results.append(result)
         return results
     
     def emergency_close_all(
