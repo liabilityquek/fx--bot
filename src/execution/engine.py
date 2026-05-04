@@ -7,8 +7,8 @@ Every cycle:
   4. Account info + daily loss circuit breaker
   5. For each pair: fetch candles + price → decision_engine.run_decision()
      → risk checks → place order → register with TradeManager → Telegram alert
-  6. TradeManager.update_all_trades() — trailing stop updates + age alerts
-  7. Trade close detection (compare known open IDs vs current broker state)
+  6. Trade close detection (compare known open IDs vs current broker state)
+  7. TradeManager.update_all_trades() — trailing stop updates + age alerts
 """
 
 import logging
@@ -189,17 +189,18 @@ class TradingEngine:
         except Exception as exc:
             self.logger.error(f"Emergency check error: {exc}")
 
-        # 5. Trailing stop updates and age alerts
-        try:
-            self.trade_manager.update_all_trades()
-        except Exception as exc:
-            self.logger.error(f"Trade manager update error: {exc}")
-
-        # 6. Trade close detection
+        # 5. Trade close detection — must run before update_all_trades so the
+        #    managed trade entry still exists when we write to Supabase.
         try:
             self._check_closed_trades()
         except Exception as exc:
             self.logger.error(f"Trade close detection error: {exc}")
+
+        # 6. Trailing stop updates and age alerts
+        try:
+            self.trade_manager.update_all_trades()
+        except Exception as exc:
+            self.logger.error(f"Trade manager update error: {exc}")
 
         self._monitoring_cycle_count += 1
 

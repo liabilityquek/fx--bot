@@ -360,35 +360,54 @@ class OandaBroker(BaseBroker):
             return TradeCloseResult(success=False)
 
     def get_closed_trade_info(self, trade_id: str) -> dict:
-        """Fetch close details for a broker-auto-closed trade (SL/TP hit)."""
-        try:
-            ep = trades.TradeDetails(accountID=self.account_id, tradeID=trade_id)
-            response = self.api.request(ep)
-            trade_data = response.get('trade', {})
+        """Fetch close details for a broker-auto-closed trade (SL/TP hit).
 
+        Tries TradeDetails first (works for open/recently-closed trades).
+        Falls back to TradesList with state=CLOSED for trades already archived
+        by OANDA (e.g. SL hit and fully processed before the bot polls).
+        """
+        def _parse_trade_data(trade_data: dict) -> dict:
             close_price = float(trade_data.get('averageClosePrice', 0))
             realized_pnl = float(trade_data.get('realizedPL', 0))
-
             sl_price = float((trade_data.get('stopLossOrder') or {}).get('price', 0))
             tp_price = float((trade_data.get('takeProfitOrder') or {}).get('price', 0))
             instrument = trade_data.get('instrument', '')
             pip_size = 0.01 if 'JPY' in instrument else 0.0001
-
             if sl_price and abs(close_price - sl_price) <= pip_size * 2:
                 reason = 'stop_loss'
             elif tp_price and abs(close_price - tp_price) <= pip_size * 2:
                 reason = 'take_profit'
             else:
                 reason = 'user'
-
             return {'close_price': close_price, 'realized_pnl': realized_pnl, 'reason': reason}
 
-        except V20Error as e:
-            self.logger.warning(f"Could not fetch closed trade info for {trade_id}: {e}")
-            return {}
+        # Primary: TradeDetails endpoint
+        try:
+            ep = trades.TradeDetails(accountID=self.account_id, tradeID=trade_id)
+            response = self.api.request(ep)
+            trade_data = response.get('trade', {})
+            if trade_data.get('averageClosePrice'):
+                return _parse_trade_data(trade_data)
+        except V20Error:
+            pass  # Fall through to closed-trades list
         except Exception as e:
             self.logger.warning(f"Error fetching closed trade info for {trade_id}: {e}")
-            return {}
+
+        # Fallback: query the closed trades list (handles NO_SUCH_TRADE from TradeDetails)
+        try:
+            ep = trades.TradesList(
+                accountID=self.account_id,
+                params={'state': 'CLOSED', 'ids': trade_id},
+            )
+            response = self.api.request(ep)
+            trade_list = response.get('trades', [])
+            if trade_list:
+                return _parse_trade_data(trade_list[0])
+            self.logger.warning(f"No closed trade record found for {trade_id}")
+        except Exception as e:
+            self.logger.warning(f"Could not fetch closed trade info for {trade_id}: {e}")
+
+        return {}
     
     def close_position(self, pair: str) -> bool:
         """Close entire position for a pair."""
