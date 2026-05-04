@@ -80,8 +80,8 @@ class RiskValidator:
         
         # Check 1: Position size reasonable
         check_name = "position_size"
-        max_units = account_balance * self.max_leverage
-        
+        max_units = (account_balance * self.max_leverage) / (entry_price or 1.0)
+
         if abs(units) > max_units:
             reasons.append(
                 f"Position size too large: {abs(units):,} units > "

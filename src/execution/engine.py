@@ -978,9 +978,9 @@ def _count_indicator_confluences(
 
     fisher_val = indicators.get('fisher')
     if fisher_val is not None:
-        if is_long and fisher_val < 0:
+        if is_long and fisher_val > 0:
             aligned.append('Fisher')
-        elif not is_long and fisher_val > 0:
+        elif not is_long and fisher_val < 0:
             aligned.append('Fisher')
 
     bb_mid = indicators.get('bb_mid')

@@ -339,7 +339,7 @@ class OandaBroker(BaseBroker):
                 accountID=self.account_id,
                 tradeID=trade_id
             )
-            response = self.api.request(endpoint)
+            response = self._with_retry(lambda: self.api.request(endpoint))
 
             if 'orderFillTransaction' in response:
                 fill = response['orderFillTransaction']
@@ -384,7 +384,7 @@ class OandaBroker(BaseBroker):
         # Primary: TradeDetails endpoint
         try:
             ep = trades.TradeDetails(accountID=self.account_id, tradeID=trade_id)
-            response = self.api.request(ep)
+            response = self._with_retry(lambda: self.api.request(ep))
             trade_data = response.get('trade', {})
             if trade_data.get('averageClosePrice'):
                 return _parse_trade_data(trade_data)
@@ -399,7 +399,7 @@ class OandaBroker(BaseBroker):
                 accountID=self.account_id,
                 params={'state': 'CLOSED', 'ids': trade_id},
             )
-            response = self.api.request(ep)
+            response = self._with_retry(lambda: self.api.request(ep))
             trade_list = response.get('trades', [])
             if trade_list:
                 return _parse_trade_data(trade_list[0])
@@ -468,7 +468,7 @@ class OandaBroker(BaseBroker):
                     tradeID=trade_id,
                     data=sl_spec
                 )
-                self.api.request(endpoint_sl)
+                self._with_retry(lambda: self.api.request(endpoint_sl))
 
             # Modify take profit
             if take_profit is not None:
@@ -483,7 +483,7 @@ class OandaBroker(BaseBroker):
                     tradeID=trade_id,
                     data=tp_spec
                 )
-                self.api.request(endpoint_tp)
+                self._with_retry(lambda: self.api.request(endpoint_tp))
             
             self.logger.info(f"✅ Trade {trade_id} modified")
             return True

@@ -66,7 +66,7 @@ class ManagedTrade:
     """Extended trade information for management."""
     trade: Trade
     strategy_name: str = ""
-    entry_time: datetime = field(default_factory=datetime.now)
+    entry_time: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
     initial_sl: Optional[float] = None
     initial_tp: Optional[float] = None
     trailing_stop_active: bool = False
@@ -306,25 +306,23 @@ class TradeManager:
         Returns:
             List of management actions taken
         """
+        # Fetch broker state OUTSIDE the lock — this is a network call and can take seconds.
+        # Holding the lock here would block close_trade() calls from the news watcher thread.
+        broker_trades = {t.trade_id: t for t in self.broker.get_open_trades()}
+
+        sl_recovery_needed: list = []  # [(trade_id, pair, recovered_sl)]
+
         with self._lock:
-            results = []
-
-            # Sync with broker first
-            broker_trades = {t.trade_id: t for t in self.broker.get_open_trades()}
-
-            # Check for closed trades (in managed but not in broker)
+            # Sync managed_trades with broker snapshot
             closed_ids = set(self.managed_trades.keys()) - set(broker_trades.keys())
             for trade_id in closed_ids:
                 self.logger.info(f"Trade {trade_id} closed (no longer at broker)")
                 del self.managed_trades[trade_id]
 
-            # Update existing trades
             for trade_id, trade in broker_trades.items():
                 if trade_id in self.managed_trades:
-                    # Update trade data
                     self.managed_trades[trade_id].trade = trade
                 else:
-                    # Restore from persisted state if available, else treat as unknown
                     persisted = self._persisted_state.get(trade_id, {})
                     managed = ManagedTrade(
                         trade=trade,
@@ -337,7 +335,6 @@ class TradeManager:
                         highest_price=trade.entry_price,
                         lowest_price=trade.entry_price,
                     )
-                    # Restore peak/trough price tracking so trailing stop continues correctly
                     if persisted:
                         managed.highest_price = persisted.get("highest_price", trade.entry_price)
                         managed.lowest_price = persisted.get("lowest_price", trade.entry_price)
@@ -347,51 +344,50 @@ class TradeManager:
                         self.logger.info(f"Restored persisted state for trade {trade_id}")
                     self.managed_trades[trade_id] = managed
 
-                    # Re-apply SL at broker if trade has none (e.g. restart after crash)
                     if trade.stop_loss is None:
                         recovered_sl = persisted.get('initial_sl') or managed.initial_sl
                         if recovered_sl is not None:
-                            self.logger.warning(
-                                f"Trade {trade_id} ({trade.pair}) has no SL at broker — "
-                                f"re-applying recovered SL {recovered_sl:.5f}"
-                            )
-                            try:
-                                self.broker.modify_trade(trade_id, trade.pair, stop_loss=recovered_sl)
-                            except Exception as _exc:
-                                self.logger.error(
-                                    f"Failed to re-apply SL for trade {trade_id}: {_exc}"
-                                )
+                            sl_recovery_needed.append((trade_id, trade.pair, recovered_sl))
 
-            for trade_id, managed in list(self.managed_trades.items()):
-                # Update price tracking for trailing stops
-                self._update_price_tracking(managed)
+            # Snapshot for per-trade processing outside the lock
+            managed_snapshot = list(self.managed_trades.items())
 
-                # Check break-even
-                self._check_break_even(managed)
+        # SL recovery broker calls — outside lock
+        for trade_id, pair, recovered_sl in sl_recovery_needed:
+            self.logger.warning(
+                f"Trade {trade_id} ({pair}) has no SL at broker — "
+                f"re-applying recovered SL {recovered_sl:.5f}"
+            )
+            try:
+                self.broker.modify_trade(trade_id, pair, stop_loss=recovered_sl)
+            except Exception as _exc:
+                self.logger.error(f"Failed to re-apply SL for trade {trade_id}: {_exc}")
 
-                # Check partial TP
-                self._check_partial_tp(managed)
+        # Per-trade processing — broker modify calls happen here, outside the lock
+        results = []
+        for trade_id, managed in managed_snapshot:
+            self._update_price_tracking(managed)
+            self._check_break_even(managed)
+            self._check_partial_tp(managed)
+            if managed.trailing_stop_active:
+                result = self._check_trailing_stop(managed)
+                if result and result.action != TradeAction.NONE:
+                    results.append(result)
 
-                # Check trailing stop
-                if managed.trailing_stop_active:
-                    result = self._check_trailing_stop(managed)
-                    if result and result.action != TradeAction.NONE:
-                        results.append(result)
-
-                # Check trade age
-                if managed.age_hours > self.max_trade_age_hours:
-                    self.logger.warning(
-                        f"Trade {trade_id} is {managed.age_hours:.1f} hours old"
+            if managed.age_hours > self.max_trade_age_hours:
+                self.logger.warning(
+                    f"Trade {trade_id} is {managed.age_hours:.1f} hours old"
+                )
+                if self.alert_manager:
+                    self.alert_manager.send_alert(
+                        f"Old trade alert: {managed.trade.pair} open for "
+                        f"{managed.age_hours:.0f} hours",
+                        priority='WARNING'
                     )
-                    if self.alert_manager:
-                        self.alert_manager.send_alert(
-                            f"Old trade alert: {managed.trade.pair} open for "
-                            f"{managed.age_hours:.0f} hours",
-                            priority='WARNING'
-                        )
 
+        with self._lock:
             self._save_state()
-            return results
+        return results
     
     def _update_price_tracking(self, managed: ManagedTrade):
         """Update highest/lowest price for trailing stop."""
