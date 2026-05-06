@@ -150,10 +150,15 @@ class NewsWatcher:
 
         if success.success:
             self.on_trade_closed_fn(trade.trade_id)
+            pnl = success.realized_pnl
+            close_price = success.close_price
+            pnl_str = f"${pnl:+.2f}" if pnl else "N/A"
+            close_str = f"{close_price:.5f}" if close_price else "N/A"
             msg = (
                 f"NEWS RISK CLOSE -- {trade.pair}\n"
                 f"Event: {event.event_name} in {event.minutes_until:.0f}min\n"
-                f"Reason: {reason}"
+                f"Reason: {reason}\n"
+                f"Close: {close_str} | P/L: {pnl_str}"
             )
             try:
                 self.alert_manager._send_telegram(msg, parse_mode='')
@@ -187,12 +192,15 @@ class NewsWatcher:
             )
             return
 
-        # Move SL to break-even
+        # Move SL to break-even with 2-pip buffer (prevents OANDA minimum distance rejection)
         try:
+            pip_size = 0.01 if 'JPY' in trade.pair else 0.0001
+            buf = 2 * pip_size
+            be_sl = trade.entry_price - buf if trade.side == OrderSide.BUY else trade.entry_price + buf
             self.broker.modify_trade(
                 trade_id=trade.trade_id,
                 pair=trade.pair,
-                stop_loss=trade.entry_price,
+                stop_loss=be_sl,
             )
         except Exception as exc:
             self.logger.warning(

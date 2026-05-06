@@ -192,8 +192,7 @@ class TradingEngine:
         except Exception as exc:
             self.logger.error(f"Emergency check error: {exc}")
 
-        # 5. Trade close detection — must run before update_all_trades so the
-        #    managed trade entry still exists when we write to Supabase.
+        # 5. Trade close detection
         try:
             self._check_closed_trades()
         except Exception as exc:
@@ -706,24 +705,6 @@ class TradingEngine:
                     reason=reason_label,
                 )
 
-                # Log to Supabase via trade_manager if available
-                managed = self.trade_manager.get_managed_trade(trade_id)
-                if managed and self.trade_manager.supabase_logger and not managed.supabase_close_logged:
-                    managed.supabase_close_logged = True
-                    from datetime import timezone as _tz
-                    sl = trade.stop_loss
-                    tp = trade.take_profit
-                    sl_pips = abs(trade.entry_price - sl) / pip_size if sl else 0.0
-                    r_multiple = round(pips_gained / sl_pips, 2) if sl_pips else None
-                    self.trade_manager.supabase_logger.update_trade(trade_id, {
-                        'close_price': close_price,
-                        'pips_gained': round(pips_gained, 1),
-                        'realized_pnl': round(realized_pnl, 2),
-                        'close_reason': raw_reason,
-                        'r_multiple': r_multiple,
-                        'close_time': datetime.now(_tz.utc).isoformat(),
-                    })
-
                 self.trade_manager.unregister_trade(trade_id)
                 with self._trades_lock:
                     self._known_open_trades.pop(trade_id, None)
@@ -985,9 +966,9 @@ def _count_indicator_confluences(
 
     bb_mid = indicators.get('bb_mid')
     if bb_mid is not None and price > 0:
-        if is_long and price < bb_mid:
+        if is_long and price > bb_mid:
             aligned.append('Bollinger')
-        elif not is_long and price > bb_mid:
+        elif not is_long and price < bb_mid:
             aligned.append('Bollinger')
 
     ms = indicators.get('market_structure')

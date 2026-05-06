@@ -82,8 +82,6 @@ class ManagedTrade:
     setup_type: str = "NONE"
     reviewer_verdict: str = ""
     reviewer_reason: str = ""
-    supabase_close_logged: bool = False
-
     @property
     def age_hours(self) -> float:
         """Get trade age in market hours, excluding FX weekends."""
@@ -110,11 +108,10 @@ class TradeManager:
         broker: BaseBroker,
         logger: Optional[logging.Logger] = None,
         alert_manager: Optional[AlertManager] = None,
-        supabase_logger=None,
     ):
         """
         Initialize trade manager.
-        
+
         Args:
             broker: Broker instance
             logger: Logger instance
@@ -123,16 +120,6 @@ class TradeManager:
         self.broker = broker
         self.logger = logger or get_logger('trade_manager')
         self.alert_manager = alert_manager
-
-        if supabase_logger is not None:
-            self.supabase_logger = supabase_logger
-        else:
-            # Auto-create if env vars are configured; silently stay None if not
-            try:
-                from src.monitoring.supabase_logger import create_supabase_logger
-                self.supabase_logger = create_supabase_logger()
-            except Exception:
-                self.supabase_logger = None
         
         # Managed trades tracking
         self.managed_trades: Dict[str, ManagedTrade] = {}
@@ -180,7 +167,7 @@ class TradeManager:
         managed = ManagedTrade(
             trade=trade,
             strategy_name=strategy_name,
-            entry_time=trade.open_time,
+            entry_time=trade.open_time or datetime.now(timezone.utc),
             initial_sl=trade.stop_loss,
             initial_tp=trade.take_profit,
             trailing_stop_active=trailing_stop,
@@ -202,32 +189,6 @@ class TradeManager:
             f"{trade.side.value.upper()} {trade.units:,} units"
         )
 
-        # Log to Supabase if available
-        if self.supabase_logger:
-            pip_size = 0.01 if 'JPY' in trade.pair else 0.0001
-            sl_pips = abs(trade.entry_price - trade.stop_loss) / pip_size if trade.stop_loss else 0.0
-            tp_pips = abs(trade.take_profit - trade.entry_price) / pip_size if trade.take_profit else 0.0
-
-            self.supabase_logger.insert_trade({
-                'trade_id': trade.trade_id,
-                'pair': trade.pair,
-                'side': trade.side.value.upper(),
-                'units': trade.units,
-                'entry_price': trade.entry_price,
-                'stop_loss': trade.stop_loss,
-                'take_profit': trade.take_profit,
-                'sl_pips': round(sl_pips, 1),
-                'tp_pips': round(tp_pips, 1),
-                'entry_reason': entry_reason,
-                'confidence': confidence,
-                'setup_type': setup_type,
-                'reviewer_verdict': reviewer_verdict,
-                'reviewer_reason': reviewer_reason,
-                'strategy_name': strategy_name,
-                'atr_value': None,  # Will be updated later via update_trade_atr()
-                'open_time': trade.open_time.isoformat() if trade.open_time else None,
-            })
-
         return managed
     
     def unregister_trade(self, trade_id: str):
@@ -243,10 +204,6 @@ class TradeManager:
         with self._lock:
             if trade_id in self.managed_trades:
                 self.managed_trades[trade_id].atr_value = atr_value
-
-        # Update Supabase if available
-        if self.supabase_logger:
-            self.supabase_logger.update_trade(trade_id, {'atr_value': atr_value})
 
     def sync_trades(self) -> Dict[str, str]:
         """
@@ -278,7 +235,7 @@ class TradeManager:
                     managed = ManagedTrade(
                         trade=trade,
                         strategy_name=persisted.get("strategy_name", "unknown"),
-                        entry_time=trade.open_time,
+                        entry_time=trade.open_time or datetime.now(timezone.utc),
                         initial_sl=trade.stop_loss,
                         initial_tp=trade.take_profit,
                         trailing_stop_active=persisted.get("trailing_stop_active", False),
@@ -327,7 +284,7 @@ class TradeManager:
                     managed = ManagedTrade(
                         trade=trade,
                         strategy_name=persisted.get("strategy_name", "unknown"),
-                        entry_time=trade.open_time,
+                        entry_time=trade.open_time or datetime.now(timezone.utc),
                         initial_sl=trade.stop_loss,
                         initial_tp=trade.take_profit,
                         trailing_stop_active=persisted.get("trailing_stop_active", False),
@@ -600,8 +557,6 @@ class TradeManager:
         Returns:
             TradeManagementResult
         """
-        from datetime import timezone as _tz
-
         with self._lock:
             managed = self.managed_trades.get(trade_id)
 
@@ -666,16 +621,6 @@ class TradeManager:
                         reason=reason_label,
                     )
 
-                if self.supabase_logger and not managed.supabase_close_logged:
-                    managed.supabase_close_logged = True
-                    self.supabase_logger.update_trade(trade_id, {
-                        'close_price': close_price,
-                        'pips_gained': round(pips, 1),
-                        'realized_pnl': round(realized_pnl, 2),
-                        'close_reason': raw_reason,
-                        'r_multiple': r_multiple,
-                        'close_time': datetime.now(_tz.utc).isoformat(),
-                    })
             else:
                 self.logger.info(
                     f"Trade closed: {trade_id} | "

@@ -269,10 +269,10 @@ class ReviewerAgent:
                     )
                     # Transient — pass through this cycle, don't fire unavailability alert
                     return ReviewResult(
-                        verdict=ReviewVerdict.APPROVED,
-                        adjusted_confidence=analyst_vote.confidence,
-                        reason='Reviewer transient error — passing through',
-                        reviewer_available=True,
+                        verdict=ReviewVerdict.REJECTED,
+                        adjusted_confidence=0.0,
+                        reason='Reviewer transient error — trade blocked for safety',
+                        reviewer_available=False,
                     )
 
         # Try NVIDIA fallback
@@ -291,10 +291,10 @@ class ReviewerAgent:
                     )
                     # Transient — pass through this cycle, don't fire unavailability alert
                     return ReviewResult(
-                        verdict=ReviewVerdict.APPROVED,
-                        adjusted_confidence=analyst_vote.confidence,
-                        reason='Reviewer transient error — passing through',
-                        reviewer_available=True,
+                        verdict=ReviewVerdict.REJECTED,
+                        adjusted_confidence=0.0,
+                        reason='Reviewer transient error — trade blocked for safety',
+                        reviewer_available=False,
                     )
 
         # Try Anthropic fallback
@@ -312,10 +312,10 @@ class ReviewerAgent:
                         f'ReviewerAgent: Anthropic transient error for {pair}: {exc}'
                     )
                     return ReviewResult(
-                        verdict=ReviewVerdict.APPROVED,
-                        adjusted_confidence=analyst_vote.confidence,
-                        reason='Reviewer transient error — passing through',
-                        reviewer_available=True,
+                        verdict=ReviewVerdict.REJECTED,
+                        adjusted_confidence=0.0,
+                        reason='Reviewer transient error — trade blocked for safety',
+                        reviewer_available=False,
                     )
 
         # All permanently exhausted

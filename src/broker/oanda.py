@@ -388,8 +388,10 @@ class OandaBroker(BaseBroker):
             trade_data = response.get('trade', {})
             if trade_data.get('averageClosePrice'):
                 return _parse_trade_data(trade_data)
-        except V20Error:
-            pass  # Fall through to closed-trades list
+        except V20Error as e:
+            if e.code != 404:
+                raise  # Re-raise auth failures, quota errors, etc.
+            # 404 = trade not found — fall through to closed-trades list
         except Exception as e:
             self.logger.warning(f"Error fetching closed trade info for {trade_id}: {e}")
 
@@ -403,9 +405,24 @@ class OandaBroker(BaseBroker):
             trade_list = response.get('trades', [])
             if trade_list:
                 return _parse_trade_data(trade_list[0])
-            self.logger.warning(f"No closed trade record found for {trade_id}")
         except Exception as e:
             self.logger.warning(f"Could not fetch closed trade info for {trade_id}: {e}")
+
+        # Retry once after 2s — OANDA may still be processing the close
+        import time
+        time.sleep(2)
+        try:
+            ep = trades.TradesList(
+                accountID=self.account_id,
+                params={'state': 'CLOSED', 'ids': trade_id},
+            )
+            response = self._with_retry(lambda: self.api.request(ep))
+            trade_list = response.get('trades', [])
+            if trade_list:
+                return _parse_trade_data(trade_list[0])
+            self.logger.warning(f"No closed trade record found for {trade_id} after retry")
+        except Exception as e:
+            self.logger.warning(f"Retry also failed for {trade_id}: {e}")
 
         return {}
     
