@@ -13,6 +13,7 @@ import logging
 import threading
 from typing import Callable, Optional, Set
 
+from config.settings import settings
 from .event_monitor import EventImpact
 from src.broker.base import OrderSide
 
@@ -192,10 +193,10 @@ class NewsWatcher:
             )
             return
 
-        # Move SL to break-even with 2-pip buffer (prevents OANDA minimum distance rejection)
+        # Move SL to break-even using BREAK_EVEN_BUFFER_PIPS
         try:
             pip_size = 0.01 if 'JPY' in trade.pair else 0.0001
-            buf = 2 * pip_size
+            buf = settings.BREAK_EVEN_BUFFER_PIPS * pip_size
             be_sl = trade.entry_price - buf if trade.side == OrderSide.BUY else trade.entry_price + buf
             self.broker.modify_trade(
                 trade_id=trade.trade_id,
