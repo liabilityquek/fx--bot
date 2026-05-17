@@ -197,7 +197,7 @@ class NewsWatcher:
         try:
             pip_size = 0.01 if 'JPY' in trade.pair else 0.0001
             buf = settings.BREAK_EVEN_BUFFER_PIPS * pip_size
-            be_sl = trade.entry_price - buf if trade.side == OrderSide.BUY else trade.entry_price + buf
+            be_sl = trade.entry_price + buf if trade.side == OrderSide.BUY else trade.entry_price - buf
             self.broker.modify_trade(
                 trade_id=trade.trade_id,
                 pair=trade.pair,

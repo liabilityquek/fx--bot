@@ -176,12 +176,14 @@ class LLMAgent:
     ) -> AgentVote:
         global _last_call_time
 
-        # Rate-limit guard — lock prevents two threads racing on the same timer
+        # Rate-limit guard — reserve the slot under lock, sleep after releasing
         with _call_time_lock:
             elapsed = time.time() - _last_call_time
-            if elapsed < _MIN_CALL_SPACING_SECONDS:
-                time.sleep(_MIN_CALL_SPACING_SECONDS - elapsed)
-            _last_call_time = time.time()
+            wait = max(0.0, _MIN_CALL_SPACING_SECONDS - elapsed)
+            _last_call_time = time.time() + wait
+
+        if wait > 0.0:
+            time.sleep(wait)
 
         user_msg = _build_analyst_message(pair, candles, price, indicators, macro_context, htf_candles)
 

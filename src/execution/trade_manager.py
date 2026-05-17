@@ -196,8 +196,8 @@ class TradeManager:
         with self._lock:
             if trade_id in self.managed_trades:
                 del self.managed_trades[trade_id]
+            self._save_state()
         self.logger.info(f"Unregistered trade {trade_id}")
-        self._save_state()
 
     def update_trade_atr(self, trade_id: str, atr_value: float) -> None:
         """Update the stored ATR for a managed trade's trailing stop calculation."""

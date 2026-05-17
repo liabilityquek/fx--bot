@@ -66,9 +66,17 @@ class TrendAgent(BaseAgent):
         if ema20 > ema50:
             signal = Signal.BUY
             gap = ema20 - ema50
-        else:
+        elif ema20 < ema50:
             signal = Signal.SELL
             gap = ema50 - ema20
+        else:
+            return AgentVote(
+                agent_name=self.name,
+                pair=pair,
+                signal=Signal.HOLD,
+                confidence=0.5,
+                reasoning="EMA20 == EMA50: no directional bias",
+            )
 
         # Base confidence: recent cross vs established gap
         established_gap = (atr_val is not None) and (gap > 0.5 * atr_val)

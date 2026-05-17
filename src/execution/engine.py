@@ -98,6 +98,9 @@ class TradingEngine:
         # Holiday alert dedup
         self._holiday_alert_sent_date: Optional[str] = None
 
+        # Per-cycle price snapshot used by monitoring thread
+        self._cycle_pair_prices: Dict[str, float] = {}
+
         # Monitoring thread
         self._monitoring_stop_event = threading.Event()
         self._monitoring_thread = None

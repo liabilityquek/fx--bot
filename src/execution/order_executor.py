@@ -143,6 +143,9 @@ class OrderExecutor:
         self._consecutive_failures: int = 0
         self._circuit_failure_threshold: int = 5
         self._circuit_cooldown_seconds: float = 60.0
+
+        # Cross-call duplicate submission guard
+        self._submitted_signal_ids: set = set()
     
     def _check_rate_limit(self) -> bool:
         """
@@ -233,11 +236,20 @@ class OrderExecutor:
                 error_message=msg
             )
 
+        # Cross-call duplicate guard — block re-submission of an already-filled signal
+        if request.signal_id and request.signal_id in self._submitted_signal_ids:
+            msg = f"Duplicate signal_id {request.signal_id} — order already submitted, skipping"
+            self.logger.warning(msg)
+            return ExecutionResult(
+                success=False,
+                status=ExecutionStatus.FAILED,
+                error_message=msg
+            )
+
         start_time = time.time()
         retry_count = 0
         current_delay = self.initial_retry_delay
         last_error = ""
-        seen_signal_ids = set()
 
         self.logger.info(
             f"Executing market order: {request.side.value.upper()} "
@@ -246,14 +258,6 @@ class OrderExecutor:
 
         while retry_count <= self.max_retries:
             try:
-                # Idempotency check on retry: skip if signal already submitted
-                if retry_count > 0 and request.signal_id in seen_signal_ids:
-                    self.logger.warning(
-                        f"Duplicate signal_id detected on retry: {request.signal_id}. Skipping."
-                    )
-                    break
-                seen_signal_ids.add(request.signal_id)
-
                 # Get current price before execution for slippage calculation
                 if request.expected_price is None:
                     price_data = self.broker.get_current_price(request.pair)
@@ -308,6 +312,8 @@ class OrderExecutor:
 
                     self._record_order_attempt(True)
                     self.execution_history.append(result)
+                    if request.signal_id:
+                        self._submitted_signal_ids.add(request.signal_id)
                     return result
 
                 # Order failed but no exception

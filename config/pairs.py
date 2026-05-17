@@ -97,26 +97,5 @@ def get_pip_value(pair: str, position_size: float = 10000, current_price: float 
     return info['pip_value'] * position_size
 
 
-def calculate_position_size_for_risk(
-    pair: str,
-    account_balance: float,
-    risk_percent: float,
-    stop_loss_pips: int
-) -> int:
-    """
-    Calculate position size based on account balance and risk parameters.
-    
-    Args:
-        pair: Trading pair
-        account_balance: Current account balance in USD
-        risk_percent: Percentage of account to risk (e.g., 0.02 for 2%)
-        stop_loss_pips: Stop loss distance in pips
-    
-    Returns:
-        Position size in units
-    """
-    risk_amount = account_balance * risk_percent
-    pip_value_per_unit = get_pip_value(pair, 1)
-    position_size = risk_amount / (stop_loss_pips * pip_value_per_unit)
-    
-    return round(position_size)
+# DEAD CODE — not called by the live pipeline and lacks live-price conversion for USD_JPY/USD_CHF.
+# Use src/risk/position_sizer.py for all position sizing.

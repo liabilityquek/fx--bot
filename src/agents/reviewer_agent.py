@@ -221,11 +221,14 @@ class ReviewerAgent:
         self, pair, candles, price, indicators, analyst_vote
     ) -> ReviewResult:
         global _last_reviewer_call
+        # Rate-limit guard — reserve the slot under lock, sleep after releasing
         with _reviewer_call_lock:
             elapsed = time.time() - _last_reviewer_call
-            if elapsed < _MIN_CALL_SPACING_SECONDS:
-                time.sleep(_MIN_CALL_SPACING_SECONDS - elapsed)
-            _last_reviewer_call = time.time()
+            wait = max(0.0, _MIN_CALL_SPACING_SECONDS - elapsed)
+            _last_reviewer_call = time.time() + wait
+
+        if wait > 0.0:
+            time.sleep(wait)
 
         user_msg = _build_review_message(pair, candles, price, indicators, analyst_vote)
 
@@ -291,7 +294,7 @@ class ReviewerAgent:
             ],
         )
         if not response.choices:
-            return ReviewResult(ReviewVerdict.APPROVED, analyst_vote.confidence, 'Empty Groq response', True)
+            return ReviewResult(ReviewVerdict.REJECTED, 0.0, 'Empty Groq response — blocked for safety', True)
         return _parse_review_response(
             response.choices[0].message.content.strip(), analyst_vote
         )
@@ -304,7 +307,7 @@ class ReviewerAgent:
             messages=[{'role': 'user', 'content': user_msg}],
         )
         if not response.content:
-            return ReviewResult(ReviewVerdict.APPROVED, analyst_vote.confidence, 'Empty Anthropic response', True)
+            return ReviewResult(ReviewVerdict.REJECTED, 0.0, 'Empty Anthropic response — blocked for safety', True)
         return _parse_review_response(
             response.content[0].text.strip(), analyst_vote
         )

@@ -11,7 +11,7 @@ This module provides emergency risk management features including:
 import logging
 from typing import Dict, List, Optional, Tuple
 from dataclasses import dataclass
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from enum import Enum, IntEnum
 
 from config.settings import settings
@@ -499,7 +499,7 @@ class EmergencyRiskController:
     
     def _calculate_daily_loss(self, current_balance: float) -> Optional[float]:
         """Calculate daily loss percentage."""
-        today = datetime.now().date()
+        today = datetime.now(timezone.utc).date()
         
         # Reset daily tracking at start of new day
         if self.daily_pnl_reset_date != today:

@@ -138,6 +138,10 @@ class ExposureTracker:
             # Calculate USD value of position
             if quote_currency == 'USD':
                 # EUR_USD, GBP_USD, AUD_USD: units are in base currency, convert to USD
+                if current_price is None:
+                    self.logger.warning(
+                        f"exposure_tracker: no current price for {pair}, using fallback 1.0 — exposure understated"
+                    )
                 value_usd = abs_units * (current_price if current_price else 1.0)
             elif base_currency == 'USD':
                 # USD_JPY, USD_CHF: units are in USD — 1 unit = 1 USD, no conversion needed

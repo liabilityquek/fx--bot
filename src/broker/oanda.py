@@ -455,18 +455,29 @@ class OandaBroker(BaseBroker):
             )
             
             # Try closing both (one will fail if no position in that direction)
+            closed_something = False
             try:
                 self.api.request(endpoint_long)
+                closed_something = True
             except V20Error as e:
-                if 'NO_UNITS_TO_CLOSE' not in str(e) and 'closeoutPosition' not in str(e):
+                if 'NO_UNITS_TO_CLOSE' in str(e) or 'closeoutPosition' in str(e):
+                    closed_something = True
+                else:
                     self.logger.warning(f"Unexpected error closing long position for {pair}: {e}")
 
             try:
                 self.api.request(endpoint_short)
+                closed_something = True
             except V20Error as e:
-                if 'NO_UNITS_TO_CLOSE' not in str(e) and 'closeoutPosition' not in str(e):
+                if 'NO_UNITS_TO_CLOSE' in str(e) or 'closeoutPosition' in str(e):
+                    closed_something = True
+                else:
                     self.logger.warning(f"Unexpected error closing short position for {pair}: {e}")
-            
+
+            if not closed_something:
+                self.logger.error(f"close_position failed for {pair}: both directions errored")
+                return False
+
             self.logger.info(f"✅ Position closed: {pair}")
             return True
             

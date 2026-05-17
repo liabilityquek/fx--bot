@@ -126,10 +126,9 @@ def _get_central_bank_rates() -> dict:
     if api_key:
         with _CB_RATES_LOCK:
             needs_refresh = time.time() - _CB_RATES_CACHE_TS > _CB_RATES_CACHE_TTL
-        if needs_refresh:
-            fetched = _fetch_cb_rates_from_fred(api_key)
-            if fetched:
-                with _CB_RATES_LOCK:
+            if needs_refresh:
+                fetched = _fetch_cb_rates_from_fred(api_key)
+                if fetched:
                     _CB_RATES_CACHE = fetched
                     _CB_RATES_CACHE_TS = time.time()
 
