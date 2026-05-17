@@ -99,7 +99,7 @@ class RiskValidator:
         pair_info = PAIR_INFO.get(pair)
         
         if pair_info:
-            pip_value = self._pip_value_usd(pair, pair_info)
+            pip_value = self._pip_value_usd(pair, pair_info, entry_price=entry_price)
             risk_amount = abs(units) * stop_loss_pips * pip_value
             risk_percent = (risk_amount / account_balance) * 100 if account_balance > 0 else 0
             
@@ -289,17 +289,20 @@ class RiskValidator:
         
         return "\n".join(lines)
     
-    def _pip_value_usd(self, pair: str, pair_info: dict) -> float:
+    def _pip_value_usd(self, pair: str, pair_info: dict, entry_price: Optional[float] = None) -> float:
         """Return pip value converted to USD for accurate risk calculation."""
         pv = pair_info['pip_value']
         quote = pair_info.get('quote_currency', '')
         if quote == 'USD':
             return pv  # EUR_USD, GBP_USD, AUD_USD — already in USD
+        if entry_price and entry_price > 0:
+            return pv / entry_price  # live rate — accurate for USD_JPY, USD_CHF
+        # fallback approximations when no live price available
         if pair == 'USD_JPY':
-            return pv / 150.0  # convert JPY → USD (approx)
+            return pv / 150.0
         if pair == 'USD_CHF':
-            return pv / 0.9    # convert CHF → USD (approx)
-        return pv  # fallback for unknown quote currencies
+            return pv / 0.9
+        return pv
 
     def validate_multiple_trades(
         self,

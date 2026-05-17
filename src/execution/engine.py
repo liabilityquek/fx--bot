@@ -734,6 +734,7 @@ class TradingEngine:
             open_positions=positions,
             current_exposure_percent=margin_util_pct,
             unrealized_pnl=account.unrealized_pnl,
+            account_nav=account.nav,
         )
 
         if status.requires_shutdown:

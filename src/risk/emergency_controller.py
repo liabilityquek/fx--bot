@@ -96,7 +96,8 @@ class EmergencyRiskController:
         initial_balance: float,
         open_positions: List[Dict],
         current_exposure_percent: float,
-        unrealized_pnl: float
+        unrealized_pnl: float,
+        account_nav: Optional[float] = None,
     ) -> EmergencyStatus:
         """
         Check if emergency conditions exist.
@@ -145,9 +146,10 @@ class EmergencyRiskController:
                 f"(limit {max_exposure_percent:.0f}%)"
             )
         
-        # Check 2: Drawdown limit
+        # Check 2: Drawdown limit — use NAV (includes unrealized P/L) not settled balance
         if initial_balance > 0:
-            current_drawdown = (initial_balance - account_balance) / initial_balance
+            nav_for_drawdown = account_nav if account_nav is not None else account_balance
+            current_drawdown = (initial_balance - nav_for_drawdown) / initial_balance
             
             if current_drawdown >= self.max_drawdown:
                 level = EmergencyLevel.PANIC
@@ -281,6 +283,7 @@ class EmergencyRiskController:
             
             # Step 2: Close all positions
             for position in open_positions:
+                instrument = "unknown"
                 try:
                     instrument = position.pair
 

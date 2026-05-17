@@ -202,9 +202,13 @@ class OrderExecutor:
         Returns:
             ExecutionResult with execution details
         """
-        # Circuit breaker check
-        if self._circuit_open:
-            elapsed = (datetime.now() - self._circuit_open_time).total_seconds()
+        # Circuit breaker check — snapshot under lock to avoid race with reset_circuit_breaker()
+        with self._rate_limit_lock:
+            circuit_open = self._circuit_open
+            circuit_open_time = self._circuit_open_time
+
+        if circuit_open and circuit_open_time is not None:
+            elapsed = (datetime.now() - circuit_open_time).total_seconds()
             if elapsed < self._circuit_cooldown_seconds:
                 msg = (
                     f"Circuit breaker is open. Retry in "
@@ -519,12 +523,12 @@ class OrderExecutor:
         elif slippage < 0:
             self.slippage_stats.negative_slippage_count += 1
         
-        self.slippage_stats.max_slippage = max(
-            self.slippage_stats.max_slippage, slippage
-        )
-        self.slippage_stats.min_slippage = min(
-            self.slippage_stats.min_slippage, slippage
-        )
+        if self.slippage_stats.total_orders == 1:
+            self.slippage_stats.max_slippage = slippage
+            self.slippage_stats.min_slippage = slippage
+        else:
+            self.slippage_stats.max_slippage = max(self.slippage_stats.max_slippage, slippage)
+            self.slippage_stats.min_slippage = min(self.slippage_stats.min_slippage, slippage)
     
     def get_slippage_report(self) -> Dict:
         """

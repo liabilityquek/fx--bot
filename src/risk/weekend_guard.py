@@ -149,13 +149,15 @@ class WeekendGuard:
         if weekday == self.SUNDAY and hour >= self.MARKET_OPEN_HOUR:
             return MarketSession.POST_WEEKEND_OPEN
 
-        # Friday approaching close
+        # Friday approaching close (or already past close)
         if weekday == self.FRIDAY:
             minutes_to_close = (
                 (self.MARKET_CLOSE_HOUR - hour) * 60 - now.minute
             )
+            if minutes_to_close < 0:
+                return MarketSession.WEEKEND
             warning_minutes = self.warning_hours_before_close * 60
-            if 0 <= minutes_to_close <= warning_minutes:
+            if minutes_to_close <= warning_minutes:
                 return MarketSession.PRE_WEEKEND_CLOSE
 
         return MarketSession.OPEN

@@ -64,36 +64,36 @@ PAIR_INFO = {
 }
 
 
-def get_pip_value(pair: str, position_size: float = 10000) -> float:
+def get_pip_value(pair: str, position_size: float = 10000, current_price: float = None) -> float:
     """
     Calculate pip value in account currency (USD) for a given position size.
-    
+
     Args:
         pair: Trading pair (e.g., 'EUR_USD')
         position_size: Position size in units (default 10,000 = 0.1 lot)
-    
+        current_price: Live market price — used for accurate conversion on USD_JPY, USD_CHF
+
     Returns:
         Pip value in USD
     """
     info = PAIR_INFO.get(pair)
     if not info:
         raise ValueError(f"Unknown pair: {pair}")
-    
+
     # For pairs quoted in USD (XXX_USD), pip value is straightforward
     if info['quote_currency'] == 'USD':
         return info['pip_value'] * position_size
-    
-    # For USD_XXX pairs, need to account for current exchange rate
-    # Simplified: use typical values
+
+    # For USD_XXX pairs divide pip value (in quote currency) by the live rate to get USD
+    if current_price and current_price > 0:
+        return (info['pip_value'] * position_size) / current_price
+
+    # Fallback approximations when no live price available
     if pair == 'USD_JPY':
-        # 1 pip = 0.01 JPY, for 10k units = 100 JPY
-        # At ~150 USD/JPY, 100 JPY ≈ $0.67
-        return (info['pip_value'] * position_size) / 150  # Approximate
-    
+        return (info['pip_value'] * position_size) / 150
     if pair == 'USD_CHF':
-        # Similar calculation
-        return (info['pip_value'] * position_size) / 0.9  # Approximate
-    
+        return (info['pip_value'] * position_size) / 0.9
+
     return info['pip_value'] * position_size
 
 
