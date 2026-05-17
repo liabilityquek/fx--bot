@@ -483,12 +483,38 @@ class TradeManager:
             self.logger.info(
                 f"Break-even set for {trade.trade_id} ({trade.pair}): SL -> {new_sl:.5f}"
             )
+            if settings.PARTIAL_TP_ENABLED and not managed.partial_tp_triggered:
+                units_to_close = int(abs(trade.units) * settings.PARTIAL_TP_RATIO)
+                if units_to_close >= 1:
+                    closed = self.broker.partial_close_trade(trade.trade_id, units_to_close)
+                    if closed:
+                        managed.partial_tp_triggered = True
+                        self.logger.info(
+                            f"Break-even partial close: {trade.pair} {trade.trade_id} — "
+                            f"closed {units_to_close} units at {profit_pips:.1f} pips"
+                        )
+                        if self.alert_manager:
+                            try:
+                                self.alert_manager._send_telegram(
+                                    f"Break-even partial close: {trade.pair} — "
+                                    f"closed {units_to_close} units at {profit_pips:.1f} pips "
+                                    f"({settings.PARTIAL_TP_RATIO*100:.0f}% of position)",
+                                    parse_mode=''
+                                )
+                            except Exception:
+                                pass
+                    else:
+                        self.logger.warning(
+                            f"Break-even partial close failed for {trade.trade_id}"
+                        )
 
     def _check_partial_tp(self, managed: ManagedTrade) -> None:
-        """Close partial position at 1:1 RR target."""
+        """Close partial position at 1:1 RR target (disabled when break-even already handled it)."""
         if not settings.PARTIAL_TP_ENABLED:
             return
         if managed.partial_tp_triggered:
+            return
+        if managed.break_even_triggered:
             return
         if managed.initial_sl is None:
             return

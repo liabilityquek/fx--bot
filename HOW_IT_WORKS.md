@@ -323,10 +323,9 @@ Example — SELL trade at 1.0948 with 100 pip SL:
 
   Price drops to 1.0943  (+5 pips):
   Safety exit moves to ─────────────► 1.0947  (break-even + 1 pip buffer)
-  You can no longer lose money on this trade.
+  Partial close: 50% of position closed at +5 pips. Small profit locked.
+  You can no longer lose money on the remaining 50%.
 
-  Price drops to 1.0848  (+100 pips, 1:1 RR):
-  Partial close: 50% of position closed. Profit locked.
   Remaining 50% rides toward 1.0748.
 
   Price drops to 1.0920  (+28 pips, trailing active):
@@ -573,7 +572,7 @@ Its core design principles are:
 4. **Indicators must back it up** — At least 3 of 7 indicators must align with the direction before any trade is placed (deterministic, not AI-text-dependent)
 5. **Only take quality setups** — RANGE trades never execute; lower-quality setups require higher AI confidence; all trades need minimum 1:2.5 risk:reward
 6. **Avoid danger zones** — No new trades around major announcements, and no piling into the same USD direction
-7. **Protect profits in stages** — Break-even at +5 pips, partial close at 1:1, ATR-adaptive trailing stop from +7 pips
+7. **Protect profits in stages** — Break-even + 50% partial close at +5 pips, ATR-adaptive trailing stop on the remainder from +7 pips
 8. **Know when to stop** — Multiple automatic shutdown triggers if things go wrong
 9. **Keep you informed** — Every significant event triggers a Telegram message; trade alerts now show named confluences
 

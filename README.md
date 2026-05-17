@@ -97,8 +97,8 @@ Trades are closed under the following conditions:
 |---------|--------|
 | **Stop Loss** | Broker-side order. SL distance = adaptive ATR multiplier × ATR. Multiplier is 1.5× (quiet market), 2.0× (normal), or 3.0× (high volatility) — chosen by comparing current ATR against the 50-bar ATR average. Fallback to `DEFAULT_STOP_LOSS_PIPS` if ATR unavailable |
 | **Take Profit** | Broker-side order. TP = `SL distance × DEFAULT_TAKE_PROFIT_RATIO` (default 2.0 = 1:2 RR) |
-| **Break-even stop** | At `BREAK_EVEN_ACTIVATION_PIPS` (default 5) profit → SL moves to entry + `BREAK_EVEN_BUFFER_PIPS` (default 1). Triggered once per trade |
-| **Partial take-profit** | At 1:1 RR (`PARTIAL_TP_RR_TARGET=1.0`) → closes `PARTIAL_TP_RATIO` (default 50%) of position and immediately moves SL to break-even. Remainder rides to full TP as a zero-risk trade. Disable with `PARTIAL_TP_ENABLED=false` |
+| **Break-even stop + partial close** | At `BREAK_EVEN_ACTIVATION_PIPS` (default 5) profit → SL moves to entry + `BREAK_EVEN_BUFFER_PIPS` (default 1) AND closes `PARTIAL_TP_RATIO` (default 50%) of position simultaneously. Triggered once per trade. Disable partial close with `PARTIAL_TP_ENABLED=false` |
+| **Partial take-profit** | Fires alongside break-even (see above). The 1:1 RR trigger (`PARTIAL_TP_RR_TARGET`) is now superseded — partial close happens at break-even pips, not at SL-distance pips |
 | **Trailing stop** | Activates after `TRAILING_STOP_ACTIVATION_PIPS` (default 7) pips profit; trails ATR × 1.5 in price behind the peak (ATR stored at trade entry). Falls back to `TRAILING_STOP_DISTANCE_PIPS` × pip size if ATR unavailable. State persisted to `data/managed_trades.json` — survives restarts |
 | **Trade age alert** | Fires after 72 market hours open (weekends Fri 22:00–Sun 22:00 UTC excluded) |
 | **Exposure breach** | Total exposure >150% of `MAX_TOTAL_EXPOSURE` → emergency close all |
@@ -108,7 +108,7 @@ Trades are closed under the following conditions:
 | **Large unrealized loss** | Floating loss >15% of account → critical alert, positions flagged |
 | **Manual** | Telegram `/stop`, kill switch file, or `emergency_close_all()` |
 
-**Sequence per open trade each cycle:** break-even check → partial TP check → trailing stop check.
+**Sequence per open trade each cycle:** break-even check (moves SL + closes 50% if `PARTIAL_TP_ENABLED`) → partial TP check (no-op if break-even already fired) → trailing stop check.
 
 Note: the weekend guard, holiday guard, and kill switch block **new** trades only. Existing open positions remain active and protected by broker-side SL/TP.
 
@@ -163,9 +163,9 @@ Copy `.env.template` to `.env` and fill in all values before deployment.
 | `TRAILING_STOP_DISTANCE_PIPS` | `3.0` | Pips the stop trails behind the peak price |
 | `BREAK_EVEN_ACTIVATION_PIPS` | `5.0` | Pips in profit before SL moves to break-even |
 | `BREAK_EVEN_BUFFER_PIPS` | `1.0` | Buffer above entry when setting break-even SL |
-| `PARTIAL_TP_ENABLED` | `true` | Enable partial close at 1:1 RR |
-| `PARTIAL_TP_RATIO` | `0.5` | Fraction of position to close at partial TP (50%) |
-| `PARTIAL_TP_RR_TARGET` | `1.0` | RR multiple at which partial TP fires (1:1) |
+| `PARTIAL_TP_ENABLED` | `true` | Enable partial close when break-even is triggered (fires at `BREAK_EVEN_ACTIVATION_PIPS`) |
+| `PARTIAL_TP_RATIO` | `0.5` | Fraction of position to close at break-even (50%) |
+| `PARTIAL_TP_RR_TARGET` | `1.0` | Legacy — no longer the primary trigger; partial close now fires at break-even pips |
 | `MAX_USD_CORRELATED_TRADES` | `2` | Max open trades in the same USD-directional bucket |
 | `PAPER_TRADING_MODE` | `true` | Set to `false` when going live |
 | `EXECUTION_INTERVAL_SECONDS` | `3600` | Cycle interval in seconds (1 hour) |
