@@ -105,13 +105,19 @@ class TradeLogger:
         
         audit_handler = logging.FileHandler(audit_path, encoding='utf-8')
         audit_handler.setLevel(logging.INFO)
-        
+
         audit_format = logging.Formatter(
             '%(asctime)s | %(message)s',
             datefmt='%Y-%m-%d %H:%M:%S'
         )
         audit_handler.setFormatter(audit_format)
-        self.logger.addHandler(audit_handler)
+        # Only add if no FileHandler pointing to the same path already exists
+        existing_paths = {
+            h.baseFilename for h in self.logger.handlers
+            if isinstance(h, logging.FileHandler)
+        }
+        if str(audit_path.resolve()) not in existing_paths:
+            self.logger.addHandler(audit_handler)
     
     def log_decision(
         self,

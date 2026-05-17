@@ -23,7 +23,7 @@ Usage::
 import logging
 import os
 import threading
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
 
@@ -94,12 +94,12 @@ class KillSwitch:
         with self._lock:
             self._active = True
             self._reason = reason
-            self._activated_at = datetime.utcnow()
+            self._activated_at = datetime.now(timezone.utc)
 
         # Write kill file with reason and timestamp
         try:
             self.KILL_FILE.write_text(
-                f"activated: {datetime.utcnow().isoformat()}Z\nreason: {reason}\n",
+                f"activated: {datetime.now(timezone.utc).isoformat()}Z\nreason: {reason}\n",
                 encoding="utf-8"
             )
         except OSError as exc:

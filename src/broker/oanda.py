@@ -47,8 +47,8 @@ class OandaBroker(BaseBroker):
         """
         Execute fn() with exponential-backoff retry on transient errors.
 
-        V20Error (OANDA logic errors) are re-raised immediately — they indicate
-        a problem with the request itself, not a network blip.
+        V20Error code 429 (rate limit) is retried with backoff.
+        Other V20Errors (logic errors) are re-raised immediately.
 
         Args:
             fn: Zero-argument callable wrapping one broker API call.
@@ -65,8 +65,19 @@ class OandaBroker(BaseBroker):
         for attempt in range(retries):
             try:
                 return fn()
-            except V20Error:
-                raise  # Broker logic errors — don't retry
+            except V20Error as exc:
+                # Rate-limit (429) is transient — retry with backoff
+                if getattr(exc, 'code', None) == 429:
+                    last_exc = exc
+                    if attempt < retries - 1:
+                        delay = base_delay * (2 ** attempt)
+                        self.logger.warning(
+                            f"OANDA rate limit (429), attempt {attempt + 1}/{retries} "
+                            f"— retrying in {delay:.0f}s"
+                        )
+                        time.sleep(delay)
+                    continue
+                raise  # All other V20 errors are logic errors — don't retry
             except Exception as exc:
                 last_exc = exc
                 if attempt < retries - 1:
@@ -605,7 +616,7 @@ class OandaBroker(BaseBroker):
                 'price': 'M'  # Mid prices
             }
             endpoint = instruments.InstrumentsCandles(instrument=pair, params=params)
-            response = self.api.request(endpoint)
+            response = self._with_retry(lambda: self.api.request(endpoint))
 
             candles = []
             for candle in response.get('candles', []):

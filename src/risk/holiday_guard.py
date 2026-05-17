@@ -88,8 +88,7 @@ class HolidayGuard:
             is_session = self._calendar.is_session(today.isoformat())
             is_holiday = not is_session
 
-            # Debug logging to understand why April 30, 2026 is flagged as holiday
-            self.logger.info(
+            self.logger.debug(
                 f"HolidayGuard: checking {today.isoformat()} | "
                 f"is_session={is_session} | is_holiday={is_holiday} | "
                 f"calendar={self._CALENDAR_CODE}"

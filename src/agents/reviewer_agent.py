@@ -16,6 +16,7 @@ reasoning depth as the analysis task.
 
 import json
 import logging
+import threading
 import time
 from dataclasses import dataclass
 from enum import Enum
@@ -28,6 +29,7 @@ from ._llm_utils import _is_credit_exhausted
 
 _MIN_CALL_SPACING_SECONDS = 5
 _last_reviewer_call: float = 0.0
+_reviewer_call_lock = threading.Lock()
 
 
 class ReviewVerdict(Enum):
@@ -203,12 +205,12 @@ class ReviewerAgent:
             return self._review(pair, candles, price, indicators, analyst_vote)
         except Exception as exc:
             self.logger.warning(f'ReviewerAgent review failed for {pair}: {exc}')
-            # Unexpected outer exception — pass through rather than block
+            # Unexpected outer exception — reviewer still available (transient), trade blocked for safety
             return ReviewResult(
                 verdict=ReviewVerdict.REJECTED,
                 adjusted_confidence=0.0,
                 reason='Reviewer unexpected error — trade blocked for safety',
-                reviewer_available=False,
+                reviewer_available=True,
             )
 
     # ------------------------------------------------------------------
@@ -219,12 +221,13 @@ class ReviewerAgent:
         self, pair, candles, price, indicators, analyst_vote
     ) -> ReviewResult:
         global _last_reviewer_call
-        elapsed = time.time() - _last_reviewer_call
-        if elapsed < _MIN_CALL_SPACING_SECONDS:
-            time.sleep(_MIN_CALL_SPACING_SECONDS - elapsed)
+        with _reviewer_call_lock:
+            elapsed = time.time() - _last_reviewer_call
+            if elapsed < _MIN_CALL_SPACING_SECONDS:
+                time.sleep(_MIN_CALL_SPACING_SECONDS - elapsed)
+            _last_reviewer_call = time.time()
 
         user_msg = _build_review_message(pair, candles, price, indicators, analyst_vote)
-        _last_reviewer_call = time.time()
 
         # Try Groq first
         if not self._groq_exhausted and self._groq_client is not None:
@@ -240,12 +243,12 @@ class ReviewerAgent:
                     self.logger.warning(
                         f'ReviewerAgent: Groq transient error for {pair}: {exc}'
                     )
-                    # Transient — pass through this cycle, don't fire unavailability alert
+                    # Transient — reviewer still available, just block this cycle
                     return ReviewResult(
                         verdict=ReviewVerdict.REJECTED,
                         adjusted_confidence=0.0,
                         reason='Reviewer transient error — trade blocked for safety',
-                        reviewer_available=False,
+                        reviewer_available=True,
                     )
 
         # Try Anthropic fallback
@@ -262,11 +265,12 @@ class ReviewerAgent:
                     self.logger.warning(
                         f'ReviewerAgent: Anthropic transient error for {pair}: {exc}'
                     )
+                    # Transient — reviewer still available, just block this cycle
                     return ReviewResult(
                         verdict=ReviewVerdict.REJECTED,
                         adjusted_confidence=0.0,
                         reason='Reviewer transient error — trade blocked for safety',
-                        reviewer_available=False,
+                        reviewer_available=True,
                     )
 
         # All permanently exhausted
@@ -286,6 +290,8 @@ class ReviewerAgent:
                 {'role': 'user',   'content': user_msg},
             ],
         )
+        if not response.choices:
+            return ReviewResult(ReviewVerdict.APPROVED, analyst_vote.confidence, 'Empty Groq response', True)
         return _parse_review_response(
             response.choices[0].message.content.strip(), analyst_vote
         )
@@ -297,6 +303,8 @@ class ReviewerAgent:
             system=_REVIEWER_SYSTEM_PROMPT,
             messages=[{'role': 'user', 'content': user_msg}],
         )
+        if not response.content:
+            return ReviewResult(ReviewVerdict.APPROVED, analyst_vote.confidence, 'Empty Anthropic response', True)
         return _parse_review_response(
             response.content[0].text.strip(), analyst_vote
         )

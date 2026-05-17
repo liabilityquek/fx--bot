@@ -134,6 +134,8 @@ class NewsRiskAgent:
                     temperature=0.1,
                     max_tokens=120,
                 )
+                if not resp.choices:
+                    return '{"decision": "HOLD", "confidence": 0.0, "reason": "empty_groq_response"}'
                 return resp.choices[0].message.content.strip()
             except Exception as exc:
                 if _is_credit_exhausted(exc):
@@ -151,6 +153,8 @@ class NewsRiskAgent:
                     system=system_prompt,
                     messages=[{"role": "user", "content": user_msg}],
                 )
+                if not resp.content:
+                    return '{"decision": "HOLD", "confidence": 0.0, "reason": "empty_anthropic_response"}'
                 return resp.content[0].text.strip()
             except Exception as exc:
                 if _is_credit_exhausted(exc):

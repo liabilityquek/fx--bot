@@ -6,7 +6,7 @@ and various sizing methods (percent-risk, Kelly criterion).
 
 import logging
 from enum import Enum
-from typing import Optional
+from typing import Optional, Tuple
 from dataclasses import dataclass
 
 from config.settings import settings
@@ -329,7 +329,7 @@ class PositionSizer:
         units: int,
         account_balance: float,
         current_price: float
-    ) -> tuple[bool, str]:
+    ) -> Tuple[bool, str]:
         """
         Validate if a position size is within acceptable limits.
         

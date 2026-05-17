@@ -17,6 +17,7 @@ retry on the next cycle.
 
 import json
 import logging
+import threading
 import time
 from typing import Dict, List, Optional
 
@@ -29,6 +30,7 @@ from ._llm_utils import _is_credit_exhausted
 # Minimum seconds between successive LLM calls (rate-limit guard)
 _MIN_CALL_SPACING_SECONDS = 10
 _last_call_time: float = 0.0
+_call_time_lock = threading.Lock()
 
 _SYSTEM_PROMPT = (
     "You are an FX trading signal agent. Respond with valid JSON only:\n"
@@ -174,13 +176,14 @@ class LLMAgent:
     ) -> AgentVote:
         global _last_call_time
 
-        # Rate-limit guard (shared across providers)
-        elapsed = time.time() - _last_call_time
-        if elapsed < _MIN_CALL_SPACING_SECONDS:
-            time.sleep(_MIN_CALL_SPACING_SECONDS - elapsed)
+        # Rate-limit guard — lock prevents two threads racing on the same timer
+        with _call_time_lock:
+            elapsed = time.time() - _last_call_time
+            if elapsed < _MIN_CALL_SPACING_SECONDS:
+                time.sleep(_MIN_CALL_SPACING_SECONDS - elapsed)
+            _last_call_time = time.time()
 
         user_msg = _build_analyst_message(pair, candles, price, indicators, macro_context, htf_candles)
-        _last_call_time = time.time()
 
         # Try Groq first
         if not self._groq_exhausted and self._groq_client is not None:
@@ -241,6 +244,8 @@ class LLMAgent:
                 {"role": "user", "content": user_msg},
             ],
         )
+        if not response.choices:
+            return AgentVote("LLMAgent", pair, Signal.HOLD, 0.5, "Empty Groq response")
         raw_text = response.choices[0].message.content.strip()
         return _parse_response(raw_text, pair)
 
@@ -251,6 +256,8 @@ class LLMAgent:
             system=_SYSTEM_PROMPT,
             messages=[{"role": "user", "content": user_msg}],
         )
+        if not response.content:
+            return AgentVote("LLMAgent", pair, Signal.HOLD, 0.5, "Empty Anthropic response")
         raw_text = response.content[0].text.strip()
         return _parse_response(raw_text, pair)
 

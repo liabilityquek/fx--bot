@@ -330,7 +330,7 @@ class TradingEngine:
             today = datetime.utcnow().strftime('%Y-%m-%d')
             if self._daily_loss_date != today:
                 self._daily_loss_date = today
-                self._daily_loss_start_balance = account.balance
+                self._daily_loss_start_balance = account.nav  # use NAV consistently
                 self._daily_loss_halted = False
 
             if self._daily_loss_start_balance and not self._daily_loss_halted:

@@ -119,4 +119,4 @@ def calculate_position_size_for_risk(
     pip_value_per_unit = get_pip_value(pair, 1)
     position_size = risk_amount / (stop_loss_pips * pip_value_per_unit)
     
-    return int(position_size)
+    return round(position_size)

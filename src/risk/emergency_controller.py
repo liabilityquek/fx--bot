@@ -507,7 +507,10 @@ class EmergencyRiskController:
         if self.daily_pnl_start_balance is None:
             self.daily_pnl_start_balance = current_balance
             return None
-        
+
+        if self.daily_pnl_start_balance <= 0:
+            return None
+
         loss = (self.daily_pnl_start_balance - current_balance) / self.daily_pnl_start_balance
         
         return max(0, loss)  # Only track losses, not gains

@@ -268,10 +268,10 @@ class ExposureTracker:
         
         limit_percent = self.max_total_exposure * 100
         
-        if new_exposure_percent > limit_percent:
+        if new_exposure_percent >= limit_percent:
             return False, (
                 f"New position would exceed exposure limit: "
-                f"{new_exposure_percent:.2f}% > {limit_percent:.2f}%"
+                f"{new_exposure_percent:.2f}% >= {limit_percent:.2f}%"
             )
         
         self.logger.debug(

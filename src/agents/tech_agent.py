@@ -86,9 +86,7 @@ class TechAgent(BaseAgent):
         else:
             signal = Signal.HOLD
 
-        # Confidence: 0.5 + (|score| / max_possible) * 0.5
-        max_possible = 0.7  # sum of all component maxima
-        confidence = 0.5 + (abs(score) / max_possible) * 0.5
+        confidence = (0.5 + (abs(score) / max_score) * 0.5) if max_score > 0 else 0.5
         confidence = max(0.0, min(1.0, confidence))
 
         # Build reasoning

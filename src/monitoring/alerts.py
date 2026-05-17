@@ -39,6 +39,19 @@ class AlertManager:
                 self.enabled = False
             else:
                 self.logger.info("✅ Telegram alerts initialized")
+
+        # Poller attributes — set properly by start_command_poller(); initialized here
+        # to prevent AttributeError if any handler is called before the poller starts.
+        self._kill_switch_ref = None
+        self._get_status_fn = None
+        self._get_calendar_fn = None
+        self._get_calhistory_fn = None
+        self._get_credits_fn = None
+        self._get_analyst_fn = None
+        self._get_reviewer_fn = None
+        self._poll_interval = 10
+        self._poll_failures = 0
+        self._last_update_id = 0
     
     def _send_telegram(self, text: str, parse_mode: str = 'Markdown') -> bool:
         """

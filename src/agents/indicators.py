@@ -111,7 +111,7 @@ def bollinger_bands(
     middle = close.rolling(period).mean().iloc[-1]
     std = close.rolling(period).std().iloc[-1]
 
-    if pd.isna(middle) or pd.isna(std):
+    if pd.isna(middle) or pd.isna(std) or std == 0.0:
         return None
 
     upper = middle + num_std * std

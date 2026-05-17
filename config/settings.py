@@ -74,10 +74,12 @@ class Settings:
     # ==========================================
     # TRADING PARAMETERS
     # ==========================================
-    TRADING_PAIRS: List[str] = os.getenv(
-        'TRADING_PAIRS',
-        'EUR_USD,GBP_USD,USD_JPY,USD_CHF,AUD_USD'
-    ).split(',')
+    TRADING_PAIRS: List[str] = [
+        p.strip() for p in os.getenv(
+            'TRADING_PAIRS',
+            'EUR_USD,GBP_USD,USD_JPY,USD_CHF,AUD_USD'
+        ).split(',')
+    ]
 
     TIMEFRAME: str = os.getenv('TIMEFRAME', 'H1')
     INITIAL_CAPITAL: float = float(os.getenv('INITIAL_CAPITAL', '10000'))

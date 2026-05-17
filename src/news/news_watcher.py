@@ -93,7 +93,7 @@ class NewsWatcher:
 
         for event in imminent:
             for trade_id, trade in trades.items():
-                if event.currency not in trade.pair:
+                if event.currency not in trade.pair.split('_'):
                     continue
                 if trade_id in self._evaluated:
                     continue
@@ -172,7 +172,7 @@ class NewsWatcher:
 
     def _partial_close_and_protect(self, trade, event, r_multiple: float) -> None:
         """Partial close 50% of units and move SL to break-even."""
-        partial_units = int(trade.units * 0.5)
+        partial_units = round(trade.units * 0.5)
         partial_ok = False
 
         try:

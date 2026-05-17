@@ -1,10 +1,12 @@
 """Trading suspension management during news events."""
 
 import logging
-from typing import Dict, Optional, Set
+from typing import Dict, Optional, Set, Tuple
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from enum import Enum
+
+import pytz
 
 from .event_monitor import EventMonitor, EconomicEvent, EventImpact
 from config.settings import settings
@@ -200,7 +202,7 @@ class SuspensionManager:
     def should_close_positions(
         self,
         minutes_before_event: int = 5
-    ) -> tuple[bool, Optional[EconomicEvent]]:
+    ) -> Tuple[bool, Optional[EconomicEvent]]:
         """
         Check if open positions should be closed due to imminent event.
         
@@ -227,7 +229,7 @@ class SuspensionManager:
     
     def _check_resume(self):
         """Check if suspended pairs should resume trading."""
-        now = datetime.now(timezone.utc)
+        now = datetime.now(pytz.UTC)
         pairs_to_resume = set()
         
         for pair, event in list(self.suspension_events.items()):

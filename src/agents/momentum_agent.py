@@ -77,7 +77,7 @@ class MomentumAgent(BaseAgent):
         if atr_val is not None and signal != Signal.HOLD:
             avg_atr = _rolling_atr_avg(df, period=14, lookback=20)
             if avg_atr is not None and atr_val > avg_atr:
-                confidence -= 0.10
+                confidence *= 0.90  # proportional 10% reduction, not absolute
                 reasoning += f" | volatile ATR={atr_val:.5f} > avg={avg_atr:.5f}"
 
         confidence = max(0.0, min(1.0, confidence))

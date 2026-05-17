@@ -9,6 +9,7 @@ All methods fail silently so a data fetch failure never blocks a trade cycle.
 """
 
 import logging
+import threading
 import time
 from typing import Optional
 
@@ -84,6 +85,7 @@ _FRED_SERIES = {
 _CB_RATES_CACHE: dict = {}       # currency -> rate (float)
 _CB_RATES_CACHE_TS: float = 0.0  # unix timestamp of last successful fetch
 _CB_RATES_CACHE_TTL: float = 86400.0  # 24 hours — rates change at most every 6 weeks
+_CB_RATES_LOCK = threading.Lock()
 
 
 def _fetch_cb_rates_from_fred(api_key: str) -> dict:
@@ -121,11 +123,18 @@ def _get_central_bank_rates() -> dict:
     global _CB_RATES_CACHE, _CB_RATES_CACHE_TS
 
     api_key = settings.FRED_API_KEY
-    if api_key and (time.time() - _CB_RATES_CACHE_TS > _CB_RATES_CACHE_TTL):
-        fetched = _fetch_cb_rates_from_fred(api_key)
-        if fetched:
-            _CB_RATES_CACHE = fetched
-            _CB_RATES_CACHE_TS = time.time()
+    if api_key:
+        with _CB_RATES_LOCK:
+            needs_refresh = time.time() - _CB_RATES_CACHE_TS > _CB_RATES_CACHE_TTL
+        if needs_refresh:
+            fetched = _fetch_cb_rates_from_fred(api_key)
+            if fetched:
+                with _CB_RATES_LOCK:
+                    _CB_RATES_CACHE = fetched
+                    _CB_RATES_CACHE_TS = time.time()
+
+    with _CB_RATES_LOCK:
+        cache_snapshot = dict(_CB_RATES_CACHE)
 
     # Merge: FRED values override settings; settings fill any gaps
     defaults = {
@@ -136,7 +145,7 @@ def _get_central_bank_rates() -> dict:
         'CHF': settings.CB_RATE_CHF,
         'AUD': settings.CB_RATE_AUD,
     }
-    return {**defaults, **_CB_RATES_CACHE}
+    return {**defaults, **cache_snapshot}
 
 # ---------------------------------------------------------------------------
 # JB News API
@@ -209,7 +218,10 @@ class MacroContext:
     # ------------------------------------------------------------------
 
     def _get_rate_differential(self, pair: str) -> dict:
-        base, quote = pair.split('_')
+        parts = pair.split('_')
+        if len(parts) != 2:
+            return {}
+        base, quote = parts
         rates = _get_central_bank_rates()
         base_rate  = rates.get(base)
         quote_rate = rates.get(quote)
@@ -251,7 +263,10 @@ class MacroContext:
             return '(JB_NEWS_API_KEY not set)'
 
         cache_ttl = settings.EVENT_CACHE_TTL_HOURS * 3600
-        base, quote = pair.split('_')
+        parts = pair.split('_')
+        if len(parts) != 2:
+            return '(invalid pair format)'
+        base, quote = parts
         headlines_by_currency = {}
 
         for currency in [base, quote]:
