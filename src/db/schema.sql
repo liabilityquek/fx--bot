@@ -31,7 +31,7 @@ CREATE TABLE IF NOT EXISTS trades (
     -- Entry decision context (for RAG retrieval)
     entry_reason    TEXT,                       -- LLM reasoning string (max 120 chars)
     confidence      NUMERIC(5,4),              -- final adjusted confidence 0.0–1.0
-    setup_type      TEXT,                       -- BREAKOUT | PULLBACK | REVERSAL | LIQUIDITY_SWEEP | RANGE | NONE
+    setup_type      TEXT,                       -- BREAKOUT | PULLBACK | REVERSAL | RANGE | NONE
     reviewer_verdict TEXT,                      -- APPROVED | ADJUSTED | REJECTED | SKIPPED | UNAVAILABLE
     reviewer_reason  TEXT,                      -- reviewer agent explanation
 

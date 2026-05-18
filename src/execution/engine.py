@@ -1007,7 +1007,6 @@ def _get_setup_quality_score(setup_type: str) -> int:
     - 5: BREAKOUT (highest quality)
     - 4: PULLBACK
     - 3: REVERSAL
-    - 2: LIQUIDITY_SWEEP
     - 0: RANGE, NONE (rejected)
 
     Returns 0 for setups that should be rejected.
@@ -1016,7 +1015,6 @@ def _get_setup_quality_score(setup_type: str) -> int:
         'BREAKOUT': 5,
         'PULLBACK': 4,
         'REVERSAL': 3,
-        'LIQUIDITY_SWEEP': 2,
         'RANGE': 0,
         'NONE': 0,
     }
@@ -1034,14 +1032,12 @@ def _get_min_confidence_for_setup(setup_type: str) -> float:
     - BREAKOUT: 0.60 (standard threshold)
     - PULLBACK: 0.65
     - REVERSAL: 0.70
-    - LIQUIDITY_SWEEP: 0.75
     - RANGE, NONE: 1.00 (effectively rejected)
     """
     confidence_map = {
         'BREAKOUT': 0.60,
         'PULLBACK': 0.65,
         'REVERSAL': 0.70,
-        'LIQUIDITY_SWEEP': 0.75,
         'RANGE': 1.00,
         'NONE': 1.00,
     }

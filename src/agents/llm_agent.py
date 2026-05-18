@@ -35,7 +35,7 @@ _call_time_lock = threading.Lock()
 _SYSTEM_PROMPT = (
     "You are an FX trading signal agent. Respond with valid JSON only:\n"
     '{"vote": "BUY|SELL|HOLD", "confidence": 0.0-1.0, "reasoning": "max 120 chars", '
-    '"setup_type": "BREAKOUT|PULLBACK|REVERSAL|LIQUIDITY_SWEEP|RANGE|NONE"}\n'
+    '"setup_type": "BREAKOUT|PULLBACK|REVERSAL|RANGE|NONE"}\n'
     "Only vote BUY or SELL if confidence > 0.55, otherwise HOLD.\n"
     "setup_type must be NONE if vote is HOLD."
 )
@@ -393,7 +393,7 @@ def _parse_response(raw: str, pair: str) -> AgentVote:
     reasoning = str(data.get("reasoning", ""))[:120]
 
     setup_type = str(data.get("setup_type", "NONE")).upper()
-    valid_setup_types = {"BREAKOUT", "PULLBACK", "REVERSAL", "LIQUIDITY_SWEEP", "RANGE", "NONE"}
+    valid_setup_types = {"BREAKOUT", "PULLBACK", "REVERSAL", "RANGE", "NONE"}
     if setup_type not in valid_setup_types:
         setup_type = "NONE"
 

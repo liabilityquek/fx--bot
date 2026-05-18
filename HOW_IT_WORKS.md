@@ -128,7 +128,7 @@ The AI is asked a simple question:
 The AI responds with:
 - A decision: **BUY**, **SELL**, or **DO NOTHING**
 - A confidence score: a number between 0 and 1 (e.g. 0.72 means 72% confident)
-- A setup type: what kind of trade this is (BREAKOUT, PULLBACK, REVERSAL, LIQUIDITY_SWEEP, or RANGE)
+- A setup type: what kind of trade this is (BREAKOUT, PULLBACK, REVERSAL, or RANGE)
 - A brief reason why
 
 ```
@@ -212,7 +212,6 @@ Not all trade types are equal. The bot ranks them:
 | BREAKOUT | Highest | 60% |
 | PULLBACK | High | 65% |
 | REVERSAL | Medium | 70% |
-| LIQUIDITY_SWEEP | Lower | 75% |
 | RANGE / NONE | Rejected | — |
 
 RANGE trades are never placed. Lower-quality setups require the AI to be more confident before proceeding.

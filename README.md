@@ -45,7 +45,7 @@ Every cycle per pair:
 3. USD sentiment score computed from close-price changes across all 5 pairs
 4. MacroContext assembles: rate differentials (FRED auto-fetch), USD sentiment, news headlines, upcoming events
 5. USD correlation guard — if `MAX_USD_CORRELATED_TRADES` (default 2) already open in same USD direction → skip pair
-6. **LLMAgent (Analyst)** receives all data and returns BUY / SELL / HOLD + confidence + `setup_type` (BREAKOUT / PULLBACK / REVERSAL / LIQUIDITY_SWEEP / RANGE)
+6. **LLMAgent (Analyst)** receives all data and returns BUY / SELL / HOLD + confidence + `setup_type` (BREAKOUT / PULLBACK / REVERSAL / RANGE)
 7. If HOLD or confidence < `CONSENSUS_THRESHOLD` (default 0.60) → skip, no trade
 8. **ReviewerAgent** checks the analyst's decision for consistency
    - APPROVED → trade executes
@@ -53,7 +53,7 @@ Every cycle per pair:
    - REJECTED → trade blocked
 9. **Phase 1 trade quality filters** (applied after reviewer APPROVED/ADJUSTED):
    - **Confluence gate** — counts indicator signals aligned with direction (RSI, MACD, EMA trend, ADX, Fisher, Bollinger, Market Structure). Rejects if `confluence_count < MIN_CONFLUENCES` (default 3). Deterministic — reads from indicators dict, not LLM text
-   - **Setup type quality filter** — RANGE and NONE are rejected outright. Lower-quality setups (LIQUIDITY_SWEEP, REVERSAL) require higher minimum confidence
+   - **Setup type quality filter** — RANGE and NONE are rejected outright. Lower-quality setups (REVERSAL) require higher minimum confidence
    - **Minimum RR validation** — rejects if `tp_pips / sl_pips < MIN_RR_RATIO` (default 2.5)
    - **M15 momentum gate** — rejects if the last 5 × 15-minute candles show momentum clearly contradicting the signal direction
 10. If either AI provider is unavailable → HOLD, Telegram alert fired. Provider hierarchy: Groq (primary) → Anthropic (fallback) → HOLD
