@@ -205,26 +205,31 @@ class OrderExecutor:
         Returns:
             ExecutionResult with execution details
         """
-        # Circuit breaker check — snapshot under lock to avoid race with reset_circuit_breaker()
+        # Circuit breaker check — read and reset decision made atomically under lock
         with self._rate_limit_lock:
             circuit_open = self._circuit_open
             circuit_open_time = self._circuit_open_time
+            if circuit_open and circuit_open_time is not None:
+                elapsed = (datetime.now() - circuit_open_time).total_seconds()
+                if elapsed >= self._circuit_cooldown_seconds:
+                    self._circuit_open = False
+                    self._circuit_open_time = None
+                    self._consecutive_failures = 0
+                    circuit_open = False
+                    self.logger.info("Circuit breaker reset.")
 
         if circuit_open and circuit_open_time is not None:
             elapsed = (datetime.now() - circuit_open_time).total_seconds()
-            if elapsed < self._circuit_cooldown_seconds:
-                msg = (
-                    f"Circuit breaker is open. Retry in "
-                    f"{self._circuit_cooldown_seconds - elapsed:.0f}s."
-                )
-                self.logger.warning(msg)
-                return ExecutionResult(
-                    success=False,
-                    status=ExecutionStatus.FAILED,
-                    error_message=msg
-                )
-            else:
-                self.reset_circuit_breaker()
+            msg = (
+                f"Circuit breaker is open. Retry in "
+                f"{self._circuit_cooldown_seconds - elapsed:.0f}s."
+            )
+            self.logger.warning(msg)
+            return ExecutionResult(
+                success=False,
+                status=ExecutionStatus.FAILED,
+                error_message=msg
+            )
 
         # Rate limit check
         if not self._check_rate_limit():

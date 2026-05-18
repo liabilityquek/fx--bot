@@ -154,7 +154,7 @@ class WeekendGuard:
             minutes_to_close = (
                 (self.MARKET_CLOSE_HOUR - hour) * 60 - now.minute
             )
-            if minutes_to_close < 0:
+            if minutes_to_close <= 0:
                 return MarketSession.WEEKEND
             warning_minutes = self.warning_hours_before_close * 60
             if minutes_to_close <= warning_minutes:
