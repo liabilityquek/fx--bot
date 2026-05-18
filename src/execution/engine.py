@@ -692,13 +692,25 @@ class TradingEngine:
                 info = self.broker.get_closed_trade_info(trade_id)
                 close_price = info.get('close_price', trade.current_price)
                 realized_pnl = info.get('realized_pnl', 0.0)
-                raw_reason = info.get('reason', 'user')
+                raw_reason = info.get('reason', '')
+                pnl_estimated = False
+
+                if not info:
+                    # OANDA returned no data — infer reason and estimate P/L from stored trade fields
+                    raw_reason = _infer_close_reason(trade, close_price)
+                    realized_pnl = _estimate_pnl(trade, close_price)
+                    pnl_estimated = True
+                elif not raw_reason:
+                    raw_reason = _infer_close_reason(trade, close_price)
 
                 reason_label = {
                     'stop_loss': 'Stop Loss Hit',
                     'take_profit': 'Take Profit Hit',
                     'user': 'Closed by User',
                 }.get(raw_reason, 'Closed by User')
+
+                if pnl_estimated:
+                    reason_label += ' (P/L est.)'
 
                 pip_size = 0.01 if 'JPY' in trade.pair else 0.0001
                 pips_gained = (close_price - trade.entry_price) / pip_size
@@ -708,7 +720,8 @@ class TradingEngine:
                 self.logger.info(
                     f"Trade closed: {trade_id} ({trade.pair}) | "
                     f"Entry: {trade.entry_price:.5f} | Close: {close_price:.5f} "
-                    f"({pips_gained:+.1f} pips) | P/L: ${realized_pnl:+.2f} | {reason_label}"
+                    f"({pips_gained:+.1f} pips) | P/L: ${realized_pnl:+.2f}"
+                    f"{' (estimated)' if pnl_estimated else ''} | {reason_label}"
                 )
 
                 self.alert_manager.alert_trade_closed(
@@ -997,6 +1010,37 @@ def _count_indicator_confluences(
             aligned.append('Market Structure')
 
     return len(aligned), aligned
+
+
+def _infer_close_reason(trade, close_price: float) -> str:
+    """Infer close reason from stored SL/TP when OANDA API returns no data."""
+    pip_size = 0.01 if 'JPY' in trade.pair else 0.0001
+    tol = pip_size * 5
+    if trade.stop_loss:
+        hit = (trade.is_long and close_price <= trade.stop_loss + tol) or \
+              (not trade.is_long and close_price >= trade.stop_loss - tol)
+        if hit:
+            return 'stop_loss'
+    if trade.take_profit:
+        hit = (trade.is_long and close_price >= trade.take_profit - tol) or \
+              (not trade.is_long and close_price <= trade.take_profit + tol)
+        if hit:
+            return 'take_profit'
+    # SL is set on every trade — default to stop_loss rather than 'user' for broker-triggered closes
+    return 'stop_loss' if trade.stop_loss else 'user'
+
+
+def _estimate_pnl(trade, close_price: float) -> float:
+    """Estimate realized P/L in USD when OANDA API data is unavailable."""
+    from config.pairs import PAIR_INFO
+    quote = PAIR_INFO.get(trade.pair, {}).get('quote_currency', 'USD')
+    diff = (close_price - trade.entry_price) if trade.is_long else (trade.entry_price - close_price)
+    if quote == 'USD':
+        return round(diff * trade.units, 2)
+    # USD_JPY / USD_CHF: P/L in quote currency, convert to USD by dividing by close rate
+    if close_price > 0:
+        return round((diff * trade.units) / close_price, 2)
+    return 0.0
 
 
 def _get_setup_quality_score(setup_type: str) -> int:

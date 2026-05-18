@@ -380,11 +380,15 @@ class OandaBroker(BaseBroker):
         def _parse_trade_data(trade_data: dict) -> dict:
             close_price = float(trade_data.get('averageClosePrice', 0))
             realized_pnl = float(trade_data.get('realizedPL', 0))
-            sl_price = float((trade_data.get('stopLossOrder') or {}).get('price', 0))
-            tp_price = float((trade_data.get('takeProfitOrder') or {}).get('price', 0))
+            sl_price  = float((trade_data.get('stopLossOrder')         or {}).get('price', 0))
+            tp_price  = float((trade_data.get('takeProfitOrder')       or {}).get('price', 0))
+            tsl_price = float((trade_data.get('trailingStopLossOrder') or {}).get('price', 0))
             instrument = trade_data.get('instrument', '')
             pip_size = 0.01 if 'JPY' in instrument else 0.0001
-            if sl_price and abs(close_price - sl_price) <= pip_size * 2:
+            # Trailing stop: wider tolerance (5 pips) — close can be past the TSL level due to slippage
+            if tsl_price and abs(close_price - tsl_price) <= pip_size * 5:
+                reason = 'stop_loss'
+            elif sl_price and abs(close_price - sl_price) <= pip_size * 5:
                 reason = 'stop_loss'
             elif tp_price and abs(close_price - tp_price) <= pip_size * 2:
                 reason = 'take_profit'
@@ -419,22 +423,23 @@ class OandaBroker(BaseBroker):
         except Exception as e:
             self.logger.warning(f"Could not fetch closed trade info for {trade_id}: {e}")
 
-        # Retry once after 2s — OANDA may still be processing the close
+        # Retry with backoff — OANDA can take up to ~15s to archive a broker-triggered close
         import time
-        time.sleep(2)
-        try:
-            ep = trades.TradesList(
-                accountID=self.account_id,
-                params={'state': 'CLOSED', 'ids': trade_id},
-            )
-            response = self._with_retry(lambda: self.api.request(ep))
-            trade_list = response.get('trades', [])
-            if trade_list:
-                return _parse_trade_data(trade_list[0])
-            self.logger.warning(f"No closed trade record found for {trade_id} after retry")
-        except Exception as e:
-            self.logger.warning(f"Retry also failed for {trade_id}: {e}")
+        for delay in (2, 5, 10):
+            time.sleep(delay)
+            try:
+                ep = trades.TradesList(
+                    accountID=self.account_id,
+                    params={'state': 'CLOSED', 'ids': trade_id},
+                )
+                response = self._with_retry(lambda: self.api.request(ep))
+                trade_list = response.get('trades', [])
+                if trade_list:
+                    return _parse_trade_data(trade_list[0])
+            except Exception as e:
+                self.logger.warning(f"Closed trade retry (delay={delay}s) failed for {trade_id}: {e}")
 
+        self.logger.warning(f"No closed trade record found for {trade_id} after retries")
         return {}
     
     def close_position(self, pair: str) -> bool:
