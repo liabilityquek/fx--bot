@@ -135,6 +135,15 @@ class TradingEngine:
         except Exception as exc:
             self.logger.warning(f"Failed to seed open trades on startup: {exc}")
 
+        # Pre-populate price cache so monitoring thread has real prices from the start
+        for pair in settings.TRADING_PAIRS:
+            try:
+                price_info = self.broker.get_current_price(pair)
+                if price_info:
+                    self._last_known_prices[pair] = (price_info['bid'] + price_info['ask']) / 2
+            except Exception as exc:
+                self.logger.warning(f"Startup price seed failed for {pair}: {exc}")
+
         if self.news_watcher:
             self.news_watcher.start()
 

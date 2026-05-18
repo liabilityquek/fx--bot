@@ -412,7 +412,7 @@ class AlertManager:
                 elif text == "/help":
                     self._send_telegram(
                         "🤖 *FX Bot Commands*\n\n"
-                        "/stop — activate kill switch (halt trading + close positions)\n"
+                        "/stop — activate kill switch (halt trading, positions stay open at broker)\n"
                         "/resume — deactivate kill switch (resume trading)\n"
                         "/status — show current bot status\n"
                         "/calendar — upcoming economic events today\n"
@@ -433,7 +433,7 @@ class AlertManager:
             ks.activate("Telegram /stop command")
         self._send_telegram(
             "⛔ *Kill Switch Activated*\n\n"
-            "All trading halted and open positions will be closed.\n"
+            "All trading halted. Open positions remain live at the broker with existing SL/TP.\n"
             "Send /resume to reactivate trading."
         )
         self.logger.warning("Kill switch activated via Telegram /stop command")

@@ -7,7 +7,7 @@ Supports three activation methods (all checked on every call to is_active()):
   3. IN-MEMORY — Call  kill_switch.activate()  at runtime (e.g. from Telegram).
 
 When active:
-  - The execution engine skips the trading cycle and closes all positions.
+  - The execution engine skips the trading cycle. Open positions remain live at the broker.
   - An alert is sent via Telegram (if configured).
 
 Usage::
@@ -107,7 +107,7 @@ class KillSwitch:
 
         self.logger.critical(
             f"⛔ KILL SWITCH ACTIVATED — reason: {reason} — "
-            "all trading halted and open positions will be closed"
+            "all trading halted, open positions remain live at broker"
         )
 
     def deactivate(self) -> None:
