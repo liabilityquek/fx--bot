@@ -59,25 +59,28 @@ class ExposureTracker:
     def update_positions(
         self,
         positions: List[Position],
-        account_balance: float
+        account_balance: float,
+        current_prices: Optional[Dict[str, float]] = None
     ) -> ExposureReport:
         """
         Update tracked positions and recalculate exposure.
-        
+
         Args:
             positions: Current open positions from broker
             account_balance: Current account balance
-        
+            current_prices: Dict of pair -> current mid price for accurate valuation
+
         Returns:
             Updated ExposureReport
         """
         self._current_positions = positions or []
         self._current_balance = account_balance
-        
+
         # Calculate and cache the exposure report
         self._last_report = self.calculate_exposure(
             open_positions=self._current_positions,
-            account_balance=self._current_balance
+            account_balance=self._current_balance,
+            current_prices=current_prices
         )
         
         # Log summary

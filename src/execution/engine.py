@@ -101,6 +101,10 @@ class TradingEngine:
         # Per-cycle price snapshot used by monitoring thread
         self._cycle_pair_prices: Dict[str, float] = {}
 
+        # Persistent mid-price cache — updated each time a pair is processed,
+        # never wiped, so exposure tracker always has a real price to use.
+        self._last_known_prices: Dict[str, float] = {}
+
         # Monitoring thread
         self._monitoring_stop_event = threading.Event()
         self._monitoring_thread = None
@@ -187,7 +191,7 @@ class TradingEngine:
 
         # 3. Update exposure tracker
         positions = self.broker.get_positions()
-        self.exposure_tracker.update_positions(positions, account.balance)
+        self.exposure_tracker.update_positions(positions, account.balance, self._last_known_prices)
 
         # 4. Emergency risk check
         try:
@@ -351,7 +355,7 @@ class TradingEngine:
 
         # Update exposure tracker
         positions = self.broker.get_positions()
-        self.exposure_tracker.update_positions(positions, account.balance)
+        self.exposure_tracker.update_positions(positions, account.balance, self._last_known_prices)
 
         # 5. Process each pair (normal days only)
         if not is_holiday:
@@ -402,6 +406,7 @@ class TradingEngine:
             self.logger.warning(f"{pair}: no price data")
             return
         price = (price_info['bid'] + price_info['ask']) / 2
+        self._last_known_prices[pair] = price
 
         # Accumulate pair prices for USD sentiment (prev close, current close)
         if len(candles) >= 2:
