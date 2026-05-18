@@ -158,6 +158,7 @@ class AlertManager:
         stop_loss: Optional[float] = None,
         take_profit: Optional[float] = None,
         pips: float = 0.0,
+        side: str = "",
     ):
         """Send alert for closed trade."""
         emoji = "✅" if pnl >= 0 else "❌"
@@ -165,10 +166,11 @@ class AlertManager:
         pips_str = f"+{pips:.1f}" if pips >= 0 else f"{pips:.1f}"
         sl_str = f"`{stop_loss:.5f}`" if stop_loss else "—"
         tp_str = f"`{take_profit:.5f}`" if take_profit else "—"
+        direction_str = f" ({side})" if side else ""
 
         message = (
             f"{emoji} *Trade Closed*\n\n"
-            f"*Pair:* `{pair}`\n"
+            f"*Pair:* `{pair}`{direction_str}\n"
             f"*Reason:* {reason}\n\n"
             f"*Entry:* `{entry_price:.5f}`\n"
             f"*Close:* `{close_price:.5f}` ({pips_str} pips)\n"

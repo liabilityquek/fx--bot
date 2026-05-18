@@ -697,7 +697,12 @@ class TradingEngine:
 
                 if not info:
                     # OANDA returned no data — infer reason and estimate P/L from stored trade fields
-                    raw_reason = _infer_close_reason(trade, close_price)
+                    raw_reason = _infer_close_reason(trade, trade.current_price)
+                    # Prefer SL/TP price over market price for estimation — more accurate than current_price
+                    if raw_reason == 'stop_loss' and trade.stop_loss:
+                        close_price = trade.stop_loss
+                    elif raw_reason == 'take_profit' and trade.take_profit:
+                        close_price = trade.take_profit
                     realized_pnl = _estimate_pnl(trade, close_price)
                     pnl_estimated = True
                 elif not raw_reason:
@@ -733,17 +738,18 @@ class TradingEngine:
                     take_profit=trade.take_profit,
                     pips=pips_gained,
                     reason=reason_label,
+                    side=trade.side.value.upper(),
                 )
 
                 self.trade_manager.unregister_trade(trade_id)
                 with self._trades_lock:
                     self._known_open_trades.pop(trade_id, None)
 
-        # Add any new trades we don't know about yet
+        # Refresh all live trades — inserts new ones and updates existing ones
+        # (captures unit changes from partial closes so estimates stay accurate)
         with self._trades_lock:
             for t in current_trades:
-                if t.trade_id not in self._known_open_trades:
-                    self._known_open_trades[t.trade_id] = t
+                self._known_open_trades[t.trade_id] = t
 
     # ------------------------------------------------------------------
     # Emergency risk check
