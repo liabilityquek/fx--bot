@@ -557,7 +557,7 @@ class TradingEngine:
         tp_pips = abs(take_profit - entry_price) / pip_value
         rr_ratio = tp_pips / sl_pips if sl_pips > 0 else 0.0
         min_rr = settings.MIN_RR_RATIO
-        if rr_ratio < min_rr:
+        if rr_ratio < min_rr - 1e-9:
             self.logger.info(
                 f"{pair}: REJECTED — poor RR ratio ({rr_ratio:.2f} < {min_rr:.2f} required)"
             )
