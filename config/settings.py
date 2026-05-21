@@ -104,6 +104,9 @@ class Settings:
     # Trailing stop
     TRAILING_STOP_ACTIVATION_PIPS: float = float(os.getenv('TRAILING_STOP_ACTIVATION_PIPS', '15.0'))
     TRAILING_STOP_DISTANCE_PIPS: float = float(os.getenv('TRAILING_STOP_DISTANCE_PIPS', '8.0'))
+    # Minimum pip movement required before re-issuing a trailing SL to the broker.
+    # Prevents float-drift from generating redundant cancel+replace cycles on OANDA.
+    TRAILING_STOP_MIN_UPDATE_PIPS: float = float(os.getenv('TRAILING_STOP_MIN_UPDATE_PIPS', '1.0'))
 
     # Break-even stop
     BREAK_EVEN_ACTIVATION_PIPS: float = float(os.getenv('BREAK_EVEN_ACTIVATION_PIPS', '5.0'))

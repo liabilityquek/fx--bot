@@ -332,13 +332,15 @@ class TradeManager:
                     results.append(result)
 
             if managed.age_hours > self.max_trade_age_hours:
+                financing_days = managed.age_hours / 24
                 self.logger.warning(
-                    f"Trade {trade_id} is {managed.age_hours:.1f} hours old"
+                    f"Trade {trade_id} is {managed.age_hours:.1f} market hours old "
+                    f"(~{financing_days:.1f} financing days — check carry cost)"
                 )
                 if self.alert_manager:
                     self.alert_manager.send_alert(
                         f"Old trade alert: {managed.trade.pair} open for "
-                        f"{managed.age_hours:.0f} hours",
+                        f"{managed.age_hours:.0f} market hours (~{financing_days:.1f} financing days)",
                         priority='WARNING'
                     )
 
@@ -393,15 +395,23 @@ class TradeManager:
         if profit_pips < self.trailing_stop_activation_pips:
             return None
         
-        # Check if new SL is better than current
+        # Round to pip precision to prevent float-drift triggering redundant broker calls.
+        # Without this, computed new_sl can be 0.7219900001 vs broker-stored 0.72199,
+        # causing a cancel+replace every monitoring cycle even when price is flat.
+        decimal_places = 3 if 'JPY' in trade.pair else 5
+        new_sl = round(new_sl, decimal_places)
+
+        # Only issue the broker call when the SL moves by at least MIN_UPDATE_PIPS.
+        min_move = settings.TRAILING_STOP_MIN_UPDATE_PIPS * pip_size
+
         current_sl = trade.stop_loss
         should_update = False
-        
+
         if current_sl is None:
             should_update = True
-        elif trade.is_long and new_sl > current_sl:
+        elif trade.is_long and new_sl >= current_sl + min_move - 1e-9:
             should_update = True
-        elif trade.is_short and new_sl < current_sl:
+        elif trade.is_short and new_sl <= current_sl - min_move + 1e-9:
             should_update = True
         
         if should_update:
