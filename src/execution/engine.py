@@ -459,6 +459,13 @@ class TradingEngine:
 
         is_long = result.final_signal == Signal.BUY
 
+        # Phase 1.0: ADX trending pre-gate — reject trades in ranging/choppy markets
+        if not _is_adx_trending(result.indicators):
+            self.logger.info(
+                f"{pair}: REJECTED — ADX below 20, market is ranging (ADX={result.indicators.get('adx')})"
+            )
+            return
+
         # Phase 1.1: Confluence validation
         confluence_count, confluence_types = _count_indicator_confluences(
             result.indicators, is_long, price
@@ -951,12 +958,12 @@ def _m15_momentum_aligned(m15_candles: list, is_long: bool) -> bool:
     last_close  = float(recent[-1].get('close', 0) or recent[-1].get('mid', {}).get('c', 0))
     net_move = last_close - first_close
 
+    # Require 60% of candles to align with trade direction (not just a simple majority)
+    threshold = len(recent) * 0.6
     if is_long:
-        # Block only if clearly bearish momentum
-        return not (bearish > bullish and net_move < 0)
+        return bullish >= threshold
     else:
-        # Block only if clearly bullish momentum
-        return not (bullish > bearish and net_move > 0)
+        return bearish >= threshold
 
 
 def _count_indicator_confluences(
@@ -965,7 +972,8 @@ def _count_indicator_confluences(
     """
     Count indicator signals aligned with the trade direction.
     Returns (count, [list of confluence names]).
-    Max 7 confluences: RSI, MACD, EMA trend, ADX, Fisher, Bollinger, Market Structure
+    Max 6 directional confluences: RSI, MACD, EMA trend, Fisher, Bollinger, Market Structure.
+    ADX is a pre-gate (trend strength only, not direction) — checked in _is_adx_trending().
     """
     aligned = []
 
@@ -990,10 +998,6 @@ def _count_indicator_confluences(
         elif not is_long and trend == 'bearish':
             aligned.append('EMA trend')
 
-    adx_val = indicators.get('adx')
-    if adx_val is not None and adx_val >= 20:
-        aligned.append('ADX')
-
     fisher_val = indicators.get('fisher')
     if fisher_val is not None:
         if is_long and fisher_val > 0:
@@ -1001,12 +1005,19 @@ def _count_indicator_confluences(
         elif not is_long and fisher_val < 0:
             aligned.append('Fisher')
 
-    bb_mid = indicators.get('bb_mid')
-    if bb_mid is not None and price > 0:
-        if is_long and price > bb_mid:
-            aligned.append('Bollinger')
-        elif not is_long and price < bb_mid:
-            aligned.append('Bollinger')
+    bb_upper = indicators.get('bb_upper')
+    bb_lower = indicators.get('bb_lower')
+    bb_mid   = indicators.get('bb_mid')
+    if bb_upper and bb_lower and bb_mid and price > 0:
+        band_range = bb_upper - bb_lower
+        if band_range > 0:
+            # Only count Bollinger as confluence when price is meaningfully above/below midline
+            # (at least 15% into the upper or lower half of the band)
+            threshold = band_range * 0.15
+            if is_long and price > bb_mid + threshold:
+                aligned.append('Bollinger')
+            elif not is_long and price < bb_mid - threshold:
+                aligned.append('Bollinger')
 
     ms = indicators.get('market_structure')
     if ms is not None:
@@ -1016,6 +1027,12 @@ def _count_indicator_confluences(
             aligned.append('Market Structure')
 
     return len(aligned), aligned
+
+
+def _is_adx_trending(indicators: dict, min_adx: float = 20.0) -> bool:
+    """Return True if ADX confirms a trending market (strength gate, direction-agnostic)."""
+    adx_val = indicators.get('adx')
+    return adx_val is not None and adx_val >= min_adx
 
 
 def _infer_close_reason(trade, close_price: float) -> str:
