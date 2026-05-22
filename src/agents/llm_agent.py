@@ -238,18 +238,33 @@ class LLMAgent:
         )
 
     def _call_groq(self, user_msg: str, pair: str) -> AgentVote:
-        response = self._groq_client.chat.completions.create(
-            model=self._groq_model,
-            max_tokens=256,
-            messages=[
-                {"role": "system", "content": _SYSTEM_PROMPT},
-                {"role": "user", "content": user_msg},
-            ],
-        )
-        if not response.choices:
-            return AgentVote("LLMAgent", pair, Signal.HOLD, 0.5, "Empty Groq response")
-        raw_text = response.choices[0].message.content.strip()
-        return _parse_response(raw_text, pair)
+        max_attempts = 3
+        for attempt in range(1, max_attempts + 1):
+            try:
+                response = self._groq_client.chat.completions.create(
+                    model=self._groq_model,
+                    max_tokens=256,
+                    messages=[
+                        {"role": "system", "content": _SYSTEM_PROMPT},
+                        {"role": "user", "content": user_msg},
+                    ],
+                )
+                if not response.choices:
+                    return AgentVote("LLMAgent", pair, Signal.HOLD, 0.5, "Empty Groq response")
+                raw_text = response.choices[0].message.content.strip()
+                return _parse_response(raw_text, pair)
+            except Exception as exc:
+                if _is_credit_exhausted(exc):
+                    raise  # caller marks groq_exhausted — no retry
+                if attempt < max_attempts:
+                    wait = 2 ** attempt  # 2s, then 4s
+                    self.logger.warning(
+                        f"LLMAgent: Groq attempt {attempt}/{max_attempts} failed for {pair}: {exc}"
+                        f" — retrying in {wait}s"
+                    )
+                    time.sleep(wait)
+                else:
+                    raise  # all attempts failed — caller returns HOLD
 
     def _call_anthropic(self, user_msg: str, pair: str) -> AgentVote:
         response = self._anthropic_client.messages.create(

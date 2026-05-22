@@ -400,7 +400,7 @@ class TradingEngine:
         candles: List[Dict] = []
         try:
             candles = self.broker.get_historical_candles(
-                pair, granularity=settings.TIMEFRAME, count=settings.CANDLE_COUNT
+                pair, granularity=settings.TIMEFRAME, count=settings.H1_CANDLE_COUNT
             ) or []
         except Exception as exc:
             self.logger.warning(f"{pair}: candle fetch failed: {exc}")
@@ -426,20 +426,20 @@ class TradingEngine:
         # Fetch higher-timeframe candles for MTF bias (non-fatal)
         htf_candles: dict = {}
         try:
-            d1 = self.broker.get_historical_candles(pair, granularity='D', count=60) or []
+            d1 = self.broker.get_historical_candles(pair, granularity='D', count=settings.D1_CANDLE_COUNT) or []
             if d1:
                 htf_candles['D1'] = d1
         except Exception:
             pass
         try:
-            h4 = self.broker.get_historical_candles(pair, granularity='H4', count=60) or []
+            h4 = self.broker.get_historical_candles(pair, granularity='H4', count=settings.H4_CANDLE_COUNT) or []
             if h4:
                 htf_candles['H4'] = h4
         except Exception:
             pass
         m15_candles: list = []
         try:
-            m15 = self.broker.get_historical_candles(pair, granularity='M15', count=10) or []
+            m15 = self.broker.get_historical_candles(pair, granularity='M15', count=settings.M15_CANDLE_COUNT) or []
             if m15:
                 htf_candles['M15'] = m15
                 m15_candles = m15

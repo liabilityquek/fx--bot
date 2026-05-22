@@ -54,7 +54,10 @@ class Settings:
     # VOTING ENGINE
     # ==========================================
     CONSENSUS_THRESHOLD: float = float(os.getenv('CONSENSUS_THRESHOLD', '0.60'))
-    CANDLE_COUNT: int = int(os.getenv('CANDLE_COUNT', '100'))
+    H1_CANDLE_COUNT: int = int(os.getenv('H1_CANDLE_COUNT', '100'))
+    M15_CANDLE_COUNT: int = int(os.getenv('M15_CANDLE_COUNT', '100'))
+    H4_CANDLE_COUNT: int = int(os.getenv('H4_CANDLE_COUNT', '60'))
+    D1_CANDLE_COUNT: int = int(os.getenv('D1_CANDLE_COUNT', '60'))
 
     # ==========================================
     # RISK GUARDRAILS

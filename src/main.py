@@ -70,7 +70,7 @@ def run_test(broker: OandaBroker, decision_engine: DecisionEngine, logger) -> bo
         logger.info(f"\n--- {pair} ---")
         try:
             candles_df = broker.get_historical_candles(
-                pair, granularity=settings.TIMEFRAME, count=settings.CANDLE_COUNT
+                pair, granularity=settings.TIMEFRAME, count=settings.H1_CANDLE_COUNT
             )
             if candles_df is None or len(candles_df) == 0:
                 logger.warning(f"{pair}: no candle data")
