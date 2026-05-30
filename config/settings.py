@@ -102,6 +102,7 @@ class Settings:
 
     # Trade quality filters (Phase 1)
     MIN_CONFLUENCES: int = int(os.getenv('MIN_CONFLUENCES', '3'))
+    MIN_CONFLUENCES_USD_CHF: int = int(os.getenv('MIN_CONFLUENCES_USD_CHF', '4'))
     MIN_RR_RATIO: float = float(os.getenv('MIN_RR_RATIO', '2.5'))
 
     # Trailing stop

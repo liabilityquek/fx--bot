@@ -75,3 +75,6 @@ data/bot_state.json
 sessions/
 .gstack/
 .claude/
+
+# wiki
+wiki/

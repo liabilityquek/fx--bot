@@ -466,13 +466,27 @@ class TradingEngine:
             )
             return
 
+        # Phase 1.0b: USD/CHF safe-haven gate — block BUY entries during broad USD weakness
+        # CHF is a safe-haven currency; USD weakness across correlated pairs signals CHF inflow risk
+        if pair == 'USD_CHF' and is_long:
+            usd_label = _compute_usd_chf_sentiment(self._cycle_pair_prices)
+            if usd_label == 'USD_WEAK':
+                self.logger.info(
+                    f"{pair}: BUY blocked — USD_WEAK environment detected across correlated pairs "
+                    f"(CHF safe-haven inflow risk)"
+                )
+                return
+
         # Phase 1.1: Confluence validation
         confluence_count, confluence_types = _count_indicator_confluences(
             result.indicators, is_long, price
         )
         result.confluence_count = confluence_count
         result.confluence_types = confluence_types
-        min_confluences = settings.MIN_CONFLUENCES
+        min_confluences = (
+            settings.MIN_CONFLUENCES_USD_CHF if pair == 'USD_CHF'
+            else settings.MIN_CONFLUENCES
+        )
         self.logger.info(
             f"{pair}: confluence check — {confluence_count}/{min_confluences} "
             f"[{', '.join(confluence_types) if confluence_types else 'none'}] "
@@ -843,11 +857,15 @@ class TradingEngine:
     ) -> None:
         """Send plain-text decision alert to Telegram."""
         prefix = "DRY RUN -- " if dry_run else ""
+        min_conf_display = (
+            settings.MIN_CONFLUENCES_USD_CHF if pair == 'USD_CHF'
+            else settings.MIN_CONFLUENCES
+        )
         lines = [
             f"{prefix}TRADE OPENED -- {pair}",
             f"Direction: {result.final_signal.value}",
             f"Setup: {result.setup_type}",
-            f"Confluences: {result.confluence_count}/{settings.MIN_CONFLUENCES} "
+            f"Confluences: {result.confluence_count}/{min_conf_display} "
             f"[{', '.join(result.confluence_types)}]",
             f"Entry: {entry_price:.5f}",
             f"SL: {stop_loss:.5f} | TP: {take_profit:.5f}",
@@ -1033,6 +1051,21 @@ def _is_adx_trending(indicators: dict, min_adx: float = 20.0) -> bool:
     """Return True if ADX confirms a trending market (strength gate, direction-agnostic)."""
     adx_val = indicators.get('adx')
     return adx_val is not None and adx_val >= min_adx
+
+
+def _compute_usd_chf_sentiment(pair_prices: dict) -> str:
+    """Derive USD directional bias from pairs already processed this cycle, excluding USD/CHF.
+
+    Uses the same logic as MacroContext._compute_usd_sentiment but operates on
+    the engine's live price snapshot so no extra API call is needed.
+
+    Returns 'USD_STRONG', 'USD_WEAK', or 'NEUTRAL'.
+    """
+    from src.agents.macro_context import _compute_usd_sentiment
+    filtered = {k: v for k, v in pair_prices.items() if k != 'USD_CHF'}
+    if not filtered:
+        return 'NEUTRAL'
+    return _compute_usd_sentiment(filtered).get('usd_label', 'NEUTRAL')
 
 
 def _infer_close_reason(trade, close_price: float) -> str:
