@@ -183,6 +183,7 @@ class TradeManager:
 
         with self._lock:
             self.managed_trades[trade.trade_id] = managed
+            self._save_state()
 
         self.logger.info(
             f"Registered trade {trade.trade_id}: {trade.pair} "
@@ -490,6 +491,7 @@ class TradeManager:
         )
         if success:
             managed.break_even_triggered = True
+            self._save_state()
             self.logger.info(
                 f"Break-even set for {trade.trade_id} ({trade.pair}): SL -> {new_sl:.5f}"
             )
@@ -522,6 +524,7 @@ class TradeManager:
         success = self.broker.partial_close_trade(trade.trade_id, units_to_close)
         if success:
             managed.partial_tp_triggered = True
+            self._save_state()
             # Immediately move SL to break-even — do NOT rely on _check_break_even()
             # because the flag we're about to set will make it skip this trade forever.
             buffer = self.break_even_buffer_pips * pip_size
@@ -536,6 +539,7 @@ class TradeManager:
                     f"Break-even set after partial TP for {trade.trade_id}: SL -> {new_sl:.5f}"
                 )
                 managed.break_even_triggered = True
+                self._save_state()
             else:
                 self.logger.warning(
                     f"Partial TP: could not move SL to break-even for {trade.trade_id}"
