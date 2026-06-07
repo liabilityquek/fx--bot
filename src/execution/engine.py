@@ -31,6 +31,7 @@ from src.risk import (
 )
 from src.risk.emergency_controller import EmergencyRiskController, ShutdownReason
 from src.execution.trade_manager import TradeManager
+from src.execution.mechanical_runner import MechanicalRunner
 from src.voting.engine import DecisionResult, DecisionEngine
 from src.agents.base import Signal
 from src.news.suspension_manager import SuspensionManager
@@ -73,6 +74,18 @@ class TradingEngine:
             alert_manager=self.alert_manager,
         )
         self.conflict_checker = TradeConflictChecker(allow_hedging=False)
+
+        # Mechanical Donchian-200/6×ATR forward-test runner (no LLM, no voting,
+        # no reviewer). Only the pairs in settings.MECHANICAL_PAIRS route here;
+        # USD/CHF and any other pair fall through to the LLM path below.
+        self.mechanical_runner = MechanicalRunner(
+            broker=self.broker,
+            trade_manager=self.trade_manager,
+            position_sizer=self.position_sizer,
+            alert_manager=self.alert_manager,
+            logger=self.logger,
+            dry_run=self.dry_run,
+        )
 
         # News suspension (Rule 1 & 2) — only active when event_monitor provided
         self.suspension_manager = (
@@ -382,6 +395,17 @@ class TradingEngine:
 
     def _process_pair(self, pair: str, account, positions) -> None:
         self.logger.info(f"--- {pair} ---")
+
+        # Mechanical Donchian-200/6×ATR forward-test path. EUR/USD, GBP/USD,
+        # AUD/USD, USD/JPY route here and bypass LLM analysts, voting, the
+        # reviewer, and the news risk protocol. USD/CHF and any pair NOT in
+        # MECHANICAL_PAIRS falls through to the existing LLM pipeline below.
+        if pair in settings.MECHANICAL_PAIRS:
+            try:
+                self.mechanical_runner.evaluate(pair, account, positions)
+            except Exception as exc:
+                self.logger.error(f"[MECH] {pair}: runner error: {exc}")
+            return
 
         # Rule 1 & 2 — news suspension check
         if self.suspension_manager:

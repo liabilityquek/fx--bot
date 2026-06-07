@@ -35,6 +35,11 @@ def parse_args():
     mode.add_argument("--test", action="store_true", help="Component test mode")
     mode.add_argument("--live", action="store_true", help="Live trading loop")
     parser.add_argument("--dry-run", action="store_true", help="Skip actual order placement")
+    parser.add_argument(
+        "--mechanical-dry-run",
+        action="store_true",
+        help="Dry-run only the mechanical Donchian-200/6×ATR pairs (LLM pairs unaffected)",
+    )
     parser.add_argument("--interval", type=int, default=None, help="Cycle interval in seconds")
     parser.add_argument("--cycle", type=int, default=None, help="Stop after N cycles")
     return parser.parse_args()
@@ -145,6 +150,12 @@ def main():
         dry_run=args.dry_run,
         event_monitor=event_monitor,
     )
+    # Optionally override the mechanical runner's dry-run independent of the
+    # global --dry-run flag, so the LLM path can run live while we observe the
+    # mechanical signals on the side.
+    if args.mechanical_dry_run and not args.dry_run:
+        engine.mechanical_runner.dry_run = True
+        logger.info("[MECH-DRY] mechanical pairs in dry-run mode (LLM path live)")
     news_watcher = NewsWatcher(
         event_monitor=event_monitor,
         broker=broker,

@@ -198,6 +198,36 @@ def atr(df: pd.DataFrame, period: int = 14) -> Optional[float]:
 
 
 # ---------------------------------------------------------------------------
+# SMA / Donchian — used by the mechanical Donchian-200/6×ATR forward-test path.
+# Excludes the current bar (shift(1)) so the channel matches backtest semantics
+# in backtest/rules/donchian.py (line 52).
+# ---------------------------------------------------------------------------
+
+def sma(df: pd.DataFrame, period: int) -> Optional[float]:
+    """Current simple moving average of close."""
+    if len(df) < period:
+        return None
+    val = df['close'].rolling(window=period).mean().iloc[-1]
+    return float(val) if pd.notna(val) else None
+
+
+def donchian_high(df: pd.DataFrame, period: int) -> Optional[float]:
+    """Highest close over the prior `period` bars, EXCLUDING the current bar."""
+    if len(df) < period + 1:
+        return None
+    val = df['close'].shift(1).rolling(window=period).max().iloc[-1]
+    return float(val) if pd.notna(val) else None
+
+
+def donchian_low(df: pd.DataFrame, period: int) -> Optional[float]:
+    """Lowest close over the prior `period` bars, EXCLUDING the current bar."""
+    if len(df) < period + 1:
+        return None
+    val = df['close'].shift(1).rolling(window=period).min().iloc[-1]
+    return float(val) if pd.notna(val) else None
+
+
+# ---------------------------------------------------------------------------
 # Fisher Transform — adapted from mirofish_strategy.py
 # ---------------------------------------------------------------------------
 

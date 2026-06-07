@@ -122,6 +122,30 @@ class Settings:
     PARTIAL_TP_RR_TARGET: float = float(os.getenv('PARTIAL_TP_RR_TARGET', '1.0'))
 
     # ==========================================
+    # MECHANICAL FORWARD-TEST (Donchian-200 / 6×ATR on D1)
+    # ----------------------------------------------------------------
+    # Pairs listed here bypass the LLM/voting/reviewer pipeline entirely
+    # and trade the pure mechanical Donchian-200 / 6×ATR trend rule on D1.
+    # USD/CHF is intentionally NOT in this list — it keeps the LLM path.
+    # See plan: forward-test/donchian-200-6-majors branch.
+    # ==========================================
+    MECHANICAL_PAIRS: List[str] = [
+        p.strip() for p in os.getenv(
+            'MECHANICAL_PAIRS',
+            'EUR_USD,GBP_USD,AUD_USD,USD_JPY'
+        ).split(',') if p.strip()
+    ]
+    MECHANICAL_RISK_PCT: float = float(os.getenv('MECHANICAL_RISK_PCT', '0.01'))
+    MECHANICAL_D1_LOOKBACK: int = int(os.getenv('MECHANICAL_D1_LOOKBACK', '200'))
+    MECHANICAL_SMA_FAST: int = int(os.getenv('MECHANICAL_SMA_FAST', '50'))
+    MECHANICAL_SMA_SLOW: int = int(os.getenv('MECHANICAL_SMA_SLOW', '100'))
+    MECHANICAL_ATR_PERIOD: int = int(os.getenv('MECHANICAL_ATR_PERIOD', '14'))
+    MECHANICAL_ATR_MULT: float = float(os.getenv('MECHANICAL_ATR_MULT', '6.0'))
+    MECHANICAL_D1_CANDLE_COUNT: int = int(os.getenv('MECHANICAL_D1_CANDLE_COUNT', '260'))
+    MECHANICAL_FORWARD_TEST_DIR: str = os.getenv('MECHANICAL_FORWARD_TEST_DIR', 'data/forward_test')
+    MECHANICAL_STATE_FILE: str = os.getenv('MECHANICAL_STATE_FILE', 'data/mechanical_state.json')
+
+    # ==========================================
     # MONITORING & ALERTS (Telegram)
     # ==========================================
     ALERT_ENABLED: bool = os.getenv('ALERT_ENABLED', 'false').lower() == 'true'

@@ -327,7 +327,7 @@ def _make_engine_with_suspension(is_suspended: bool):
     status = SuspensionStatus(
         is_suspended=is_suspended,
         reason=SuspensionReason.HIGH_IMPACT_NEWS if is_suspended else None,
-        suspended_pairs={"EUR_USD"} if is_suspended else set(),
+        suspended_pairs={"USD_CHF"} if is_suspended else set(),
         triggering_event=None,
         resume_time=None,
         message="Suspended: NFP" if is_suspended else "Trading allowed",
@@ -341,18 +341,21 @@ def _make_engine_with_suspension(is_suspended: bool):
 class TestNewsEventSuspension(unittest.TestCase):
 
     def test_suspended_pair_skips_candle_fetch(self):
+        # USD_CHF is the only remaining LLM-path pair after the mechanical fork.
+        # Mechanical pairs (EUR_USD, GBP_USD, AUD_USD, USD_JPY) deliberately
+        # ignore news suspension per the Donchian-200/6×ATR forward-test spec.
         engine = _make_engine_with_suspension(is_suspended=True)
-        engine._process_pair("EUR_USD", _make_account(), [])
+        engine._process_pair("USD_CHF", _make_account(), [])
         engine.broker.get_historical_candles.assert_not_called()
 
     def test_suspended_pair_skips_decision_engine(self):
         engine = _make_engine_with_suspension(is_suspended=True)
-        engine._process_pair("EUR_USD", _make_account(), [])
+        engine._process_pair("USD_CHF", _make_account(), [])
         engine.decision_engine.run_decision.assert_not_called()
 
     def test_unsuspended_pair_proceeds_to_candle_fetch(self):
         engine = _make_engine_with_suspension(is_suspended=False)
-        engine._process_pair("EUR_USD", _make_account(), [])
+        engine._process_pair("USD_CHF", _make_account(), [])
         engine.broker.get_historical_candles.assert_called_once()
 
 

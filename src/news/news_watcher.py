@@ -97,6 +97,10 @@ class NewsWatcher:
                     continue
                 if trade_id in self._evaluated:
                     continue
+                # Mechanical Donchian-200/6×ATR pairs ignore the news risk
+                # protocol entirely (explicit forward-test constraint).
+                if trade.pair in settings.MECHANICAL_PAIRS:
+                    continue
                 self._evaluated.add(trade_id)
 
                 r_multiple = self._compute_r_multiple(trade)

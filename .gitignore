@@ -78,3 +78,11 @@ sessions/
 
 # wiki
 wiki/
+
+# Tests
+tests/
+
+# Backtest run artefacts (CSVs, plots, summaries) — the backtest source code
+# under backtest/ stays tracked because the live mechanical signal module
+# imports from backtest.rules.donchian.
+data/backtest/

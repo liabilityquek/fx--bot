@@ -82,6 +82,18 @@ class ManagedTrade:
     setup_type: str = "NONE"
     reviewer_verdict: str = ""
     reviewer_reason: str = ""
+
+    # --- Mechanical Donchian-200/6×ATR forward-test path -------------------
+    # Trades flagged is_mechanical bypass break-even, partial-TP, and the
+    # live 1.5×ATR / fixed-pip trailing logic. Their exit is daily-close
+    # confirmed against trailing_extreme ± atr_mult * atr_at_entry, driven
+    # by MechanicalRunner once per UTC day. The broker-side SL placed at
+    # entry is a disaster fallback only.
+    is_mechanical: bool = False
+    atr_at_entry: Optional[float] = None     # ATR14 at signal close, frozen at entry
+    trailing_extreme: Optional[float] = None  # highest high (long) / lowest low (short) seen since entry
+    last_d1_eval_day: Optional[str] = None    # YYYY-MM-DD UTC of last MechanicalRunner evaluation
+
     @property
     def age_hours(self) -> float:
         """Get trade age in market hours, excluding FX weekends."""
@@ -151,6 +163,10 @@ class TradeManager:
         setup_type: str = "NONE",
         reviewer_verdict: str = "",
         reviewer_reason: str = "",
+        is_mechanical: bool = False,
+        atr_at_entry: Optional[float] = None,
+        trailing_extreme: Optional[float] = None,
+        last_d1_eval_day: Optional[str] = None,
     ) -> ManagedTrade:
         """
         Register a new trade for management.
@@ -179,6 +195,10 @@ class TradeManager:
             setup_type=setup_type,
             reviewer_verdict=reviewer_verdict,
             reviewer_reason=reviewer_reason,
+            is_mechanical=is_mechanical,
+            atr_at_entry=atr_at_entry,
+            trailing_extreme=trailing_extreme if trailing_extreme is not None else (trade.entry_price if is_mechanical else None),
+            last_d1_eval_day=last_d1_eval_day,
         )
 
         with self._lock:
@@ -251,6 +271,10 @@ class TradeManager:
                         managed.break_even_triggered = persisted.get("break_even_triggered", False)
                         managed.partial_tp_triggered = persisted.get("partial_tp_triggered", False)
                         managed.atr_value = persisted.get("atr_value", None)
+                        managed.is_mechanical = persisted.get("is_mechanical", False)
+                        managed.atr_at_entry = persisted.get("atr_at_entry", None)
+                        managed.trailing_extreme = persisted.get("trailing_extreme", None)
+                        managed.last_d1_eval_day = persisted.get("last_d1_eval_day", None)
                         self.logger.info(f"Restored persisted state for trade {trade_id}")
                     self.managed_trades[trade_id] = managed
                     result[trade_id] = "added"
@@ -299,6 +323,10 @@ class TradeManager:
                         managed.break_even_triggered = persisted.get("break_even_triggered", False)
                         managed.partial_tp_triggered = persisted.get("partial_tp_triggered", False)
                         managed.atr_value = persisted.get("atr_value", None)
+                        managed.is_mechanical = persisted.get("is_mechanical", False)
+                        managed.atr_at_entry = persisted.get("atr_at_entry", None)
+                        managed.trailing_extreme = persisted.get("trailing_extreme", None)
+                        managed.last_d1_eval_day = persisted.get("last_d1_eval_day", None)
                         self.logger.info(f"Restored persisted state for trade {trade_id}")
                     self.managed_trades[trade_id] = managed
 
@@ -325,12 +353,16 @@ class TradeManager:
         results = []
         for trade_id, managed in managed_snapshot:
             self._update_price_tracking(managed)
-            self._check_break_even(managed)
-            self._check_partial_tp(managed)
-            if managed.trailing_stop_active:
-                result = self._check_trailing_stop(managed)
-                if result and result.action != TradeAction.NONE:
-                    results.append(result)
+            # Mechanical Donchian-200/6×ATR trades bypass break-even, partial-TP,
+            # and the 1.5×ATR live trailing logic. Their exit runs on D1 close
+            # via MechanicalRunner -> evaluate_mechanical_exit().
+            if not managed.is_mechanical:
+                self._check_break_even(managed)
+                self._check_partial_tp(managed)
+                if managed.trailing_stop_active:
+                    result = self._check_trailing_stop(managed)
+                    if result and result.action != TradeAction.NONE:
+                        results.append(result)
 
             if managed.age_hours > self.max_trade_age_hours:
                 financing_days = managed.age_hours / 24
@@ -558,6 +590,86 @@ class TradeManager:
                 except Exception:
                     pass
 
+    def get_mechanical_trades_for_pair(self, pair: str) -> List[ManagedTrade]:
+        """Return all managed mechanical trades for a given pair."""
+        with self._lock:
+            return [
+                m for m in self.managed_trades.values()
+                if m.is_mechanical and m.trade.pair == pair
+            ]
+
+    def evaluate_mechanical_exit(
+        self,
+        managed: ManagedTrade,
+        bar_high: float,
+        bar_low: float,
+        bar_close: float,
+        eval_day: str,
+        atr_mult: float = 6.0,
+    ) -> Optional[TradeManagementResult]:
+        """Daily-close-confirmed 6×ATR trail exit for mechanical Donchian trades.
+
+        Called by MechanicalRunner once per UTC day per pair after the D1 bar
+        closes. Updates trailing_extreme from the just-closed D1 bar's high
+        (long) or low (short), then checks whether the bar's CLOSE breaches
+        `trailing_extreme ∓ atr_mult * atr_at_entry`. Intra-bar wicks are
+        deliberately ignored to match backtest semantics.
+
+        Args:
+            managed: the mechanical trade
+            bar_high / bar_low / bar_close: OHLC of the just-closed D1 bar
+            eval_day: YYYY-MM-DD UTC of the just-closed bar (idempotency stamp)
+            atr_mult: trail multiple (default 6.0; matches DONCHIAN_200_ATR6)
+
+        Returns:
+            TradeManagementResult if a close was triggered, else None.
+        """
+        if not managed.is_mechanical:
+            return None
+        if managed.atr_at_entry is None or managed.atr_at_entry <= 0:
+            self.logger.warning(
+                f"Mechanical trade {managed.trade.trade_id} has no atr_at_entry — "
+                "cannot evaluate trail exit"
+            )
+            return None
+
+        # Idempotency: skip if we already evaluated this exact D1 close.
+        if managed.last_d1_eval_day == eval_day:
+            return None
+
+        trade = managed.trade
+        stop_distance = atr_mult * managed.atr_at_entry
+
+        # Seed trailing_extreme if missing (e.g. fresh restart).
+        if managed.trailing_extreme is None:
+            managed.trailing_extreme = trade.entry_price
+
+        # Ratchet the extreme from the just-closed bar.
+        if trade.is_long:
+            if bar_high > managed.trailing_extreme:
+                managed.trailing_extreme = bar_high
+            stop_level = managed.trailing_extreme - stop_distance
+            breached = bar_close <= stop_level
+        else:
+            if bar_low < managed.trailing_extreme:
+                managed.trailing_extreme = bar_low
+            stop_level = managed.trailing_extreme + stop_distance
+            breached = bar_close >= stop_level
+
+        managed.last_d1_eval_day = eval_day
+        with self._lock:
+            self._save_state()
+
+        self.logger.info(
+            f"[MECH] {trade.pair} {trade.side.value.upper()} D1 trail check "
+            f"({eval_day}): close={bar_close:.5f} extreme={managed.trailing_extreme:.5f} "
+            f"stop_level={stop_level:.5f} breached={breached}"
+        )
+
+        if breached:
+            return self.close_trade(trade.trade_id, reason="mechanical_trail_close")
+        return None
+
     def close_trade(
         self,
         trade_id: str,
@@ -598,6 +710,9 @@ class TradeManager:
             elif reason in ('emergency',):
                 reason_label = 'Emergency Close'
                 raw_reason = 'emergency'
+            elif reason == 'mechanical_trail_close':
+                reason_label = 'Donchian D1 Trail (6×ATR)'
+                raw_reason = 'mechanical_trail_close'
             else:
                 reason_label = 'Closed by User'
                 raw_reason = 'user'
@@ -752,6 +867,10 @@ class TradeManager:
                     "break_even_triggered": managed.break_even_triggered,
                     "partial_tp_triggered": managed.partial_tp_triggered,
                     "atr_value": managed.atr_value,
+                    "is_mechanical": managed.is_mechanical,
+                    "atr_at_entry": managed.atr_at_entry,
+                    "trailing_extreme": managed.trailing_extreme,
+                    "last_d1_eval_day": managed.last_d1_eval_day,
                 }
             self._state_file.parent.mkdir(parents=True, exist_ok=True)
             self._state_file.write_text(json.dumps(data, indent=2))
