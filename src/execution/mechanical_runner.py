@@ -115,17 +115,21 @@ class MechanicalRunner:
             return
 
         # Fetch D1 candles — broker.get_historical_candles already filters incomplete bars.
+        # Derive fetch count from strategy requirements so the request auto-scales
+        # if lookback / SMA / ATR settings change. MECHANICAL_D1_CANDLE_COUNT acts
+        # as a manual floor.
+        min_bars = (
+            self.cfg.lookback + self.cfg.sma_slow + self.cfg.atr_period + 5
+        )
+        fetch_count = max(settings.MECHANICAL_D1_CANDLE_COUNT, min_bars + 30)
         try:
             candles = self.broker.get_historical_candles(
-                pair, granularity="D", count=settings.MECHANICAL_D1_CANDLE_COUNT
+                pair, granularity="D", count=fetch_count
             ) or []
         except Exception as exc:
             self.logger.warning(f"[MECH] {pair}: D1 candle fetch failed: {exc}")
             return
 
-        min_bars = (
-            self.cfg.lookback + self.cfg.sma_slow + self.cfg.atr_period + 5
-        )
         if len(candles) < min_bars:
             self.logger.warning(
                 f"[MECH] {pair}: insufficient D1 candles ({len(candles)} < {min_bars})"
