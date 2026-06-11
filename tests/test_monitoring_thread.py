@@ -94,6 +94,13 @@ def _make_engine():
     return engine
 
 
+def _start_engine(engine):
+    """Run engine.start() in a background thread — start() blocks until stop()."""
+    t = threading.Thread(target=engine.start, daemon=True)
+    t.start()
+    return t
+
+
 # ---------------------------------------------------------------------------
 # Monitoring Thread Startup
 # ---------------------------------------------------------------------------
@@ -103,7 +110,7 @@ class TestMonitoringThreadStartup(unittest.TestCase):
     def test_monitoring_thread_starts_on_engine_start(self):
         """Verify monitoring thread is created and started when engine starts."""
         engine = _make_engine()
-        engine.start()
+        _start_engine(engine)
 
         # Give thread a moment to start
         time.sleep(0.1)
@@ -116,7 +123,7 @@ class TestMonitoringThreadStartup(unittest.TestCase):
     def test_monitoring_thread_is_daemon(self):
         """Verify monitoring thread is a daemon thread."""
         engine = _make_engine()
-        engine.start()
+        _start_engine(engine)
 
         # Give thread a moment to start
         time.sleep(0.1)
@@ -128,7 +135,7 @@ class TestMonitoringThreadStartup(unittest.TestCase):
     def test_monitoring_thread_stops_on_engine_stop(self):
         """Verify monitoring thread stops when engine stops."""
         engine = _make_engine()
-        engine.start()
+        _start_engine(engine)
 
         # Give thread a moment to start
         time.sleep(0.1)
@@ -145,7 +152,7 @@ class TestMonitoringThreadStartup(unittest.TestCase):
     def test_monitoring_stop_event_set_on_stop(self):
         """Verify stop event is set when engine stops."""
         engine = _make_engine()
-        engine.start()
+        _start_engine(engine)
 
         # Give thread a moment to start
         time.sleep(0.1)
@@ -172,7 +179,7 @@ class TestMonitoringCycleTiming(unittest.TestCase):
 
         # Override monitoring interval to 2 seconds for faster testing
         with patch('config.settings.settings.MONITORING_INTERVAL_SECONDS', 2):
-            engine.start()
+            _start_engine(engine)
 
             # Wait for first cycle
             time.sleep(0.5)
@@ -194,7 +201,7 @@ class TestMonitoringCycleTiming(unittest.TestCase):
 
         # Override execution interval to 2 seconds for faster testing
         with patch('config.settings.settings.EXECUTION_INTERVAL_SECONDS', 2):
-            engine.start()
+            _start_engine(engine)
 
             # Wait for first cycle
             time.sleep(0.5)
@@ -217,7 +224,7 @@ class TestMonitoringCycleTiming(unittest.TestCase):
         # Override intervals to 1 second for faster testing
         with patch('config.settings.settings.MONITORING_INTERVAL_SECONDS', 1), \
              patch('config.settings.settings.EXECUTION_INTERVAL_SECONDS', 1):
-            engine.start()
+            _start_engine(engine)
 
             # Let both cycles run
             time.sleep(3)
@@ -234,7 +241,7 @@ class TestMonitoringCycleTiming(unittest.TestCase):
 
         # Override monitoring interval to 1 second for faster testing
         with patch('config.settings.settings.MONITORING_INTERVAL_SECONDS', 1):
-            engine.start()
+            _start_engine(engine)
 
             # Wait for first cycle
             time.sleep(0.5)
@@ -260,7 +267,7 @@ class TestThreadSafety(unittest.TestCase):
     def test_concurrent_trade_registration_safe(self):
         """Verify concurrent trade registration is thread-safe."""
         engine = _make_engine()
-        engine.start()
+        _start_engine(engine)
 
         # Simulate concurrent trade registrations
         def register_trade(trade_id):
@@ -295,7 +302,7 @@ class TestThreadSafety(unittest.TestCase):
             fake_trade.pair = "EUR_USD"
             engine._known_open_trades[f"trade_{i}"] = fake_trade
 
-        engine.start()
+        _start_engine(engine)
 
         # Simulate concurrent trade unregistrations
         def unregister_trade(trade_id):
@@ -319,7 +326,7 @@ class TestThreadSafety(unittest.TestCase):
     def test_concurrent_trade_sync_safe(self):
         """Verify concurrent trade sync operations are thread-safe."""
         engine = _make_engine()
-        engine.start()
+        _start_engine(engine)
 
         # Simulate concurrent sync operations
         def sync_trade(trade_id):
@@ -354,7 +361,10 @@ class TestThreadSafety(unittest.TestCase):
     def test_concurrent_price_tracking_safe(self):
         """Verify concurrent price tracking is thread-safe."""
         engine = _make_engine()
-        engine.start()
+        _start_engine(engine)
+
+        # Let the first main cycle finish — it resets _cycle_pair_prices
+        time.sleep(0.5)
 
         # Simulate concurrent price updates
         def update_price(pair, price):
@@ -378,7 +388,7 @@ class TestThreadSafety(unittest.TestCase):
     def test_lock_prevents_race_conditions(self):
         """Verify lock prevents race conditions."""
         engine = _make_engine()
-        engine.start()
+        _start_engine(engine)
 
         # Simulate concurrent access to shared state
         counter = [0]

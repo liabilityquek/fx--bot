@@ -323,6 +323,26 @@ class TradeManager:
         # Per-trade processing — broker modify calls happen here, outside the lock
         results = []
         for trade_id, managed in managed_snapshot:
+            # Time stop — a trade still under water after this long has invalidated
+            # its thesis; cut it rather than waiting for the full SL to be hit.
+            if (
+                settings.TIME_STOP_ENABLED
+                and managed.age_hours >= settings.TIME_STOP_HOURS
+            ):
+                trade = managed.trade
+                losing = (
+                    trade.current_price < trade.entry_price
+                    if trade.is_long
+                    else trade.current_price > trade.entry_price
+                )
+                if losing:
+                    self.logger.info(
+                        f"Time stop: {trade.pair} trade {trade_id} losing after "
+                        f"{managed.age_hours:.1f} market hours — closing"
+                    )
+                    results.append(self.close_trade(trade_id, reason='time_stop'))
+                    continue
+
             self._update_price_tracking(managed)
             self._check_break_even(managed)
             self._check_partial_tp(managed)
@@ -377,7 +397,7 @@ class TradeManager:
         
         # Determine trailing distance: ATR-based if available, else fixed pips
         if managed.atr_value and managed.atr_value > 0:
-            trail_distance = managed.atr_value * 1.5  # ATR-based distance in price
+            trail_distance = managed.atr_value * settings.TRAILING_ATR_MULTIPLIER
         else:
             trail_distance = managed.trailing_stop_distance * pip_size  # fallback to fixed pips
 
@@ -391,8 +411,16 @@ class TradeManager:
             # For short: trail above lowest price
             new_sl = managed.lowest_price + trail_distance
         
-        # Only activate trailing stop after minimum profit
-        if profit_pips < self.trailing_stop_activation_pips:
+        # Only activate trailing stop after minimum profit.
+        # R-based when the initial SL is known: don't start trailing until the trade
+        # has earned it (default 1R) — trailing too early chokes winners with the
+        # same fixed pip distance regardless of how wide the ATR stop is.
+        risk_pips = self._initial_risk_pips(managed, pip_size)
+        if risk_pips:
+            activation_pips = risk_pips * settings.TRAILING_STOP_ACTIVATION_R
+        else:
+            activation_pips = self.trailing_stop_activation_pips
+        if profit_pips < activation_pips:
             return None
         
         # Round to pip precision to prevent float-drift triggering redundant broker calls.
@@ -462,8 +490,20 @@ class TradeManager:
         
         return None
     
+    def _initial_risk_pips(self, managed: ManagedTrade, pip_size: float) -> Optional[float]:
+        """Initial SL distance in pips (the trade's 1R), or None when unknown."""
+        if managed.initial_sl is None:
+            return None
+        risk_pips = abs(managed.trade.entry_price - managed.initial_sl) / pip_size
+        return risk_pips if risk_pips > 0 else None
+
     def _check_break_even(self, managed: ManagedTrade) -> None:
-        """Move SL to break-even when profit_pips >= BREAK_EVEN_ACTIVATION_PIPS."""
+        """Move SL to break-even once the trade has earned it.
+
+        Trigger is R-based when the initial SL is known (default 0.5R): a fixed
+        pip trigger scratches trades on noise when the ATR stop is wide.
+        Falls back to BREAK_EVEN_ACTIVATION_PIPS when the initial SL is unknown.
+        """
         if managed.break_even_triggered:
             return
         trade = managed.trade
@@ -472,7 +512,12 @@ class TradeManager:
             profit_pips = (trade.current_price - trade.entry_price) / pip_size
         else:
             profit_pips = (trade.entry_price - trade.current_price) / pip_size
-        if profit_pips < self.break_even_activation_pips:
+        risk_pips = self._initial_risk_pips(managed, pip_size)
+        if risk_pips:
+            trigger_pips = risk_pips * settings.BREAK_EVEN_TRIGGER_R
+        else:
+            trigger_pips = self.break_even_activation_pips
+        if profit_pips < trigger_pips:
             return
         buffer = self.break_even_buffer_pips * pip_size
         if trade.is_long:
@@ -594,6 +639,9 @@ class TradeManager:
             elif reason in ('emergency',):
                 reason_label = 'Emergency Close'
                 raw_reason = 'emergency'
+            elif reason in ('time_stop',):
+                reason_label = 'Time Stop (stale losing trade)'
+                raw_reason = 'time_stop'
             else:
                 reason_label = 'Closed by User'
                 raw_reason = 'user'

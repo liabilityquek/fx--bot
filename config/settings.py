@@ -103,11 +103,35 @@ class Settings:
     # Trade quality filters (Phase 1)
     MIN_CONFLUENCES: int = int(os.getenv('MIN_CONFLUENCES', '3'))
     MIN_CONFLUENCES_USD_CHF: int = int(os.getenv('MIN_CONFLUENCES_USD_CHF', '4'))
-    MIN_RR_RATIO: float = float(os.getenv('MIN_RR_RATIO', '2.5'))
+    # TP is constructed as SL distance x DEFAULT_TAKE_PROFIT_RATIO, so the RR gate
+    # default must not exceed that ratio or every signal is rejected.
+    MIN_RR_RATIO: float = float(os.getenv('MIN_RR_RATIO', '2.0'))
+
+    # Entry quality gates (Phase 2)
+    # Skip entries when the live spread exceeds this many pips — bad fills kill expectancy.
+    MAX_SPREAD_PIPS: float = float(os.getenv('MAX_SPREAD_PIPS', '3.0'))
+    # Only open new trades during high-liquidity hours (London/NY overlap window, UTC).
+    # Avoids the rollover spread spike (~21:00 UTC) and thin Asian-session chop.
+    SESSION_FILTER_ENABLED: bool = os.getenv('SESSION_FILTER_ENABLED', 'true').lower() == 'true'
+    SESSION_START_UTC_HOUR: int = int(os.getenv('SESSION_START_UTC_HOUR', '6'))
+    SESSION_END_UTC_HOUR: int = int(os.getenv('SESSION_END_UTC_HOUR', '20'))
+    # Hard gate: H4 EMA20/50 trend must agree with the trade direction.
+    HTF_ALIGNMENT_ENABLED: bool = os.getenv('HTF_ALIGNMENT_ENABLED', 'true').lower() == 'true'
+    # Block re-entry on a pair for this many hours after a losing close.
+    LOSS_COOLDOWN_HOURS: float = float(os.getenv('LOSS_COOLDOWN_HOURS', '4.0'))
+    # After this many consecutive losses, risk per trade is halved.
+    # MAX_CONSECUTIVE_LOSSES (above) halts new trades for the rest of the day.
+    CONSECUTIVE_LOSS_RISK_REDUCTION_AFTER: int = int(
+        os.getenv('CONSECUTIVE_LOSS_RISK_REDUCTION_AFTER', '3')
+    )
 
     # Trailing stop
     TRAILING_STOP_ACTIVATION_PIPS: float = float(os.getenv('TRAILING_STOP_ACTIVATION_PIPS', '15.0'))
     TRAILING_STOP_DISTANCE_PIPS: float = float(os.getenv('TRAILING_STOP_DISTANCE_PIPS', '8.0'))
+    # Trail only after price has moved this fraction of the initial SL distance (R-based).
+    # Falls back to TRAILING_STOP_ACTIVATION_PIPS when the initial SL is unknown.
+    TRAILING_STOP_ACTIVATION_R: float = float(os.getenv('TRAILING_STOP_ACTIVATION_R', '1.0'))
+    TRAILING_ATR_MULTIPLIER: float = float(os.getenv('TRAILING_ATR_MULTIPLIER', '1.5'))
     # Minimum pip movement required before re-issuing a trailing SL to the broker.
     # Prevents float-drift from generating redundant cancel+replace cycles on OANDA.
     TRAILING_STOP_MIN_UPDATE_PIPS: float = float(os.getenv('TRAILING_STOP_MIN_UPDATE_PIPS', '1.0'))
@@ -115,6 +139,13 @@ class Settings:
     # Break-even stop
     BREAK_EVEN_ACTIVATION_PIPS: float = float(os.getenv('BREAK_EVEN_ACTIVATION_PIPS', '5.0'))
     BREAK_EVEN_BUFFER_PIPS: float = float(os.getenv('BREAK_EVEN_BUFFER_PIPS', '1.0'))
+    # Move SL to break-even after price has moved this fraction of the initial SL distance.
+    # Falls back to BREAK_EVEN_ACTIVATION_PIPS when the initial SL is unknown.
+    BREAK_EVEN_TRIGGER_R: float = float(os.getenv('BREAK_EVEN_TRIGGER_R', '0.5'))
+
+    # Time stop — close trades still under water after this many market hours
+    TIME_STOP_ENABLED: bool = os.getenv('TIME_STOP_ENABLED', 'true').lower() == 'true'
+    TIME_STOP_HOURS: float = float(os.getenv('TIME_STOP_HOURS', '48.0'))
 
     # Partial take-profits
     PARTIAL_TP_ENABLED: bool = os.getenv('PARTIAL_TP_ENABLED', 'true').lower() == 'true'

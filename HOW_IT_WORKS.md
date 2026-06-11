@@ -33,7 +33,7 @@ The bot does this automatically, all day, every day — but with five currency p
 │  3. Runs the numbers (math analysis)            │
 │  4. Asks an AI: "Should I buy or sell?"         │
 │  5. Asks a second AI: "Is this actually safe?"  │
-│  6. Runs 4 quality checks (confluences, RR...)  │
+│  6. Runs 5 quality checks (confluences, RR...)  │
 │  7. Places the trade (if all checks pass)       │
 │  8. Manages open trades (protects profits)      │
 │  9. Repeats in 1 hour                           │
@@ -218,16 +218,26 @@ RANGE trades are never placed. Lower-quality setups require the AI to be more co
 
 **Check 3 — Risk:reward validation**
 
-The actual SL and TP distances are calculated from ATR. The bot checks: `TP pips ÷ SL pips ≥ 2.5`. If the trade geometry doesn't meet minimum 1:2.5 risk:reward, it is rejected regardless of how good the signal looks.
+The actual SL and TP distances are calculated from ATR. The bot checks: `TP pips ÷ SL pips ≥ 2.0`. If the trade geometry doesn't meet minimum 1:2 risk:reward, it is rejected regardless of how good the signal looks.
 
 **Check 4 — M15 momentum gate**
 
 The last 5 fifteen-minute candles are checked. If short-term momentum clearly contradicts the intended direction (e.g. a SELL signal but the last 5 M15 bars are bullish and rising), the trade is blocked. Ambiguous momentum is allowed through — only clear contradictions are blocked.
 
+**Check 5 — H4 trend alignment**
+
+The trade direction must agree with the 4-hour chart's trend (EMA20 vs EMA50). A BUY against a falling H4 trend — or a SELL against a rising one — is rejected. An experienced trader never fights the higher timeframe.
+
 ```
-All 4 checks pass  →  Proceed to trade placement
+All 5 checks pass  →  Proceed to trade placement
 Any check fails    →  Rejected. No trade.
 ```
+
+On top of these, three entry conditions are checked before the AI is even consulted:
+
+- **Session filter** — new trades only between 06:00 and 20:00 UTC (configurable). The rollover hour and the thin Asian session are avoided.
+- **Spread gate** — if the live spread is wider than 3 pips, the pair is skipped this cycle.
+- **Post-loss cooldown** — after a losing trade on a pair, that pair is blocked for 4 hours. After 3 consecutive losses anywhere, risk per trade is halved; after 5, the bot stops opening trades for the rest of the day.
 
 ---
 
@@ -299,38 +309,43 @@ Max loss on this trade: $200
 
 While a trade is open, the bot checks it every minute (via a separate background monitoring thread) in this order:
 
-**1. Break-even stop (at +5 pips profit)**
+**1. Time stop (after 48 market hours)**
 
-Once a trade is 5 pips in profit, the bot moves the safety exit to your entry price + 1 pip. From this point, you cannot lose money on this trade — the worst outcome is a tiny profit.
+A trade that is still losing after 48 market hours (weekends excluded) has invalidated its thesis — it is closed rather than left to drift into the full stop loss. Winning trades are never time-stopped.
 
-**2. Partial take-profit (at 1:1 risk/reward)**
+**2. Break-even stop (at half the risk distance, +0.5R)**
+
+Once the trade has moved half-way to where its stop loss would be hit (e.g. +25 pips on a 50-pip stop), the bot moves the safety exit to your entry price + 1 pip. The trigger scales with the trade's actual stop distance — wide-stop trades aren't scratched by normal noise, tight-stop trades lock in early.
+
+**3. Partial take-profit (at 1:1 risk/reward)**
 
 Once profit equals the original risk (e.g. if you risked 100 pips, once you're +100 pips), the bot closes half the position and pockets that profit. It also immediately moves the safety exit to your entry price + 1 pip. The remaining half now rides toward the full target with zero downside — it cannot result in a loss.
 
-**3. Trailing protection (at +7 pips profit)**
+**4. Trailing protection (at 1R profit)**
 
-Once a trade is 7 pips in profit, the bot automatically moves the safety exit to follow the price — always staying ATR × 1.5 in price behind the best price reached (ATR is measured and stored when the trade opens). This means the trailing distance widens automatically in volatile markets and tightens in calm ones. If the price reverses, the trade closes automatically with a profit.
+Once the trade has earned its full risk distance, the bot moves the safety exit to follow the price — always staying ATR × 1.5 in price behind the best price reached (ATR is measured and stored when the trade opens). This means the trailing distance widens automatically in volatile markets and tightens in calm ones. If the price reverses, the trade closes automatically with a profit.
 
-All three thresholds are configurable in `.env`. The full trade state is saved to disk — if the bot restarts, it picks up exactly where it left off.
+All thresholds are configurable in `.env`. The full trade state is saved to disk — if the bot restarts, it picks up exactly where it left off.
 
 ```
 Example — SELL trade at 1.0948 with 100 pip SL:
 
   Trade opens ──────────────────────► 1.0948  (entry)
-  Safety exit ──────────────────────► 1.1000  (100 pips above, SL)
+  Safety exit ──────────────────────► 1.1048  (100 pips above, SL)
   Full profit target ───────────────► 1.0748  (200 pips below, TP at 1:2 RR)
 
-  Price drops to 1.0943  (+5 pips):
+  Price drops to 1.0898  (+50 pips = 0.5R):
   Safety exit moves to ─────────────► 1.0947  (break-even + 1 pip buffer)
-  Partial close: 50% of position closed at +5 pips. Small profit locked.
-  You can no longer lose money on the remaining 50%.
+  You can no longer lose money on this trade.
 
-  Remaining 50% rides toward 1.0748.
+  Price drops to 1.0848  (+100 pips = 1R):
+  Partial close: 50% of position closed. Profit pocketed.
+  Trailing activates on the remaining 50%.
 
-  Price drops to 1.0920  (+28 pips, trailing active):
-  Safety exit moves to ─────────────► 1.0920 + (ATR × 1.5)  (ATR-based distance behind peak)
+  Price drops to 1.0820  (+128 pips):
+  Safety exit follows ──────────────► 1.0820 + (ATR × 1.5)  (ATR-based distance behind trough)
 
-  Price reverses and hits 1.0923:
+  Price reverses and hits the trailed exit:
   Remaining position closes automatically. Profit locked in.
 ```
 
@@ -507,8 +522,9 @@ The bot connects to several external services:
                     │ Phase 1 Filters     │
                     │ Confluences ≥ 3?    │──► NO → No trade.
                     │ Setup type valid?   │──► NO → No trade.
-                    │ RR ≥ 2.5?          │──► NO → No trade.
+                    │ RR ≥ 2.0?          │──► NO → No trade.
                     │ M15 momentum ok?   │──► NO → No trade.
+                    │ H4 trend aligned?  │──► NO → No trade.
                     └──────┬──────────────┘
                            │ ALL PASS
                     ┌──────▼──────────────┐
@@ -551,8 +567,8 @@ The bot connects to several external services:
 | 1:08 PM | Bot calculates: 2% of $10k = $200 max loss. ATR is normal vs recent history → 2× multiplier → SL = 52 pips. Size = 38,000 units. |
 | 1:09 PM | Trade placed: SELL 38,000 units at 1.0948. Safety exit at 1.1000. Profit exit at 1.0844 (1:2 RR). |
 | 1:10 PM | Telegram: "SELL Euro/Dollar opened. Setup: PULLBACK. Size: 0.38 lots." |
-| 2:00 PM | Price at 1.0943. +5 pips profit. **Break-even activates** — safety exit moves to 1.0947. |
-| 3:00 PM | Price at 1.0896. +52 pips profit (1:1 RR). **Partial TP fires** — 50% closed. $104 profit locked in. |
+| 2:00 PM | Price at 1.0922. +26 pips profit (0.5R on the 52-pip stop). **Break-even activates** — safety exit moves to 1.0947. |
+| 3:00 PM | Price at 1.0896. +52 pips profit (1:1 RR). **Partial TP fires** — 50% closed. $104 profit locked in. Trailing activates on the remainder. |
 | 4:00 PM | Price at 1.0875. Trailing stop ATR × 1.5 behind peak. Safety exit follows dynamically. |
 | 4:30 PM | Price reaches 1.0844 — full profit exit. Remaining 50% closes automatically. |
 | 4:31 PM | Telegram: "Trade closed at target. Total profit: +$212. Account: $10,212." |
@@ -569,9 +585,10 @@ Its core design principles are:
 2. **Always have an exit** — Safety exit is placed at the broker the moment a trade opens
 3. **Two AIs must agree** — One to find the opportunity, one to sanity-check it
 4. **Indicators must back it up** — At least 3 of 7 indicators must align with the direction before any trade is placed (deterministic, not AI-text-dependent)
-5. **Only take quality setups** — RANGE trades never execute; lower-quality setups require higher AI confidence; all trades need minimum 1:2.5 risk:reward
-6. **Avoid danger zones** — No new trades around major announcements, and no piling into the same USD direction
-7. **Protect profits in stages** — Break-even + 50% partial close at +5 pips, ATR-adaptive trailing stop on the remainder from +7 pips
+5. **Only take quality setups** — RANGE trades never execute; lower-quality setups require higher AI confidence; all trades need minimum 1:2 risk:reward and must agree with the H4 trend
+6. **Avoid danger zones** — No new trades around major announcements, outside high-liquidity session hours, on wide spreads, or piling into the same USD direction
+7. **Protect profits in stages** — Break-even at +0.5R, 50% partial close at +1R, ATR-adaptive trailing stop on the remainder; stale losers are time-stopped after 48 hours
+7a. **Respect losing streaks** — A losing pair is benched for 4 hours; risk halves after 3 straight losses; trading stops for the day after 5
 8. **Know when to stop** — Multiple automatic shutdown triggers if things go wrong
 9. **Keep you informed** — Every significant event triggers a Telegram message; trade alerts now show named confluences
 
