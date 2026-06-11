@@ -14,11 +14,12 @@ Every cycle:
 import logging
 import threading
 import time
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Dict, List, Optional
 
 import pandas as pd
 
+from config.pairs import PAIR_INFO
 from config.settings import settings
 from src.broker.base import BaseBroker, OrderSide, Trade
 from src.monitoring.alerts import AlertManager
@@ -94,6 +95,11 @@ class TradingEngine:
         self._daily_loss_start_balance: Optional[float] = None
         self._daily_loss_date: Optional[str] = None
         self._daily_loss_halted: bool = False
+
+        # Loss-streak management — pair cooldowns and consecutive-loss throttle
+        self._pair_loss_cooldown: Dict[str, datetime] = {}   # pair → re-entry allowed after
+        self._consecutive_losses: int = 0
+        self._loss_streak_halted: bool = False
 
         # Holiday alert dedup
         self._holiday_alert_sent_date: Optional[str] = None
@@ -348,6 +354,9 @@ class TradingEngine:
                 self._daily_loss_date = today
                 self._daily_loss_start_balance = account.nav  # use NAV consistently
                 self._daily_loss_halted = False
+                # Fresh day — reset the loss streak so a bad day doesn't bleed into the next
+                self._consecutive_losses = 0
+                self._loss_streak_halted = False
 
             if self._daily_loss_start_balance and not self._daily_loss_halted:
                 daily_loss_pct = (
@@ -370,7 +379,7 @@ class TradingEngine:
         if not is_holiday:
             self._cycle_pair_prices: dict = {}
             for pair in settings.TRADING_PAIRS:
-                if self._daily_loss_halted:
+                if self._daily_loss_halted or self._loss_streak_halted:
                     break
                 try:
                     self._process_pair(pair, account, positions)
@@ -395,6 +404,23 @@ class TradingEngine:
                     f"{pair}: suspended — {status.message} (resumes ~{resume_str})"
                 )
                 return
+
+        # Session filter — only open new trades during high-liquidity hours
+        if not self._in_trading_session():
+            self.logger.info(
+                f"{pair}: outside trading session window "
+                f"({settings.SESSION_START_UTC_HOUR:02d}:00–{settings.SESSION_END_UTC_HOUR:02d}:00 UTC) "
+                f"— no new entries"
+            )
+            return
+
+        # Post-loss cooldown — don't immediately re-enter a pair that just stopped out
+        cooldown_until = self._pair_loss_cooldown.get(pair)
+        if cooldown_until and datetime.utcnow() < cooldown_until:
+            self.logger.info(
+                f"{pair}: post-loss cooldown active until {cooldown_until.strftime('%H:%M')} UTC — skipping"
+            )
+            return
 
         # Fetch candles — broker returns List[Dict] with flat keys
         candles: List[Dict] = []
@@ -422,6 +448,16 @@ class TradingEngine:
             prev_close = float(candles[-2].get('close', 0) or (candles[-2].get('mid', {}).get('c', 0)))
             curr_close = float(candles[-1].get('close', 0) or (candles[-1].get('mid', {}).get('c', 0)))
             self._cycle_pair_prices[pair] = (prev_close, curr_close)
+
+        # Spread gate — a wide spread means poor liquidity and an immediate cost handicap
+        pip_value = PAIR_INFO.get(pair, {}).get('pip_value', 0.0001)
+        spread_pips = (price_info['ask'] - price_info['bid']) / pip_value
+        if spread_pips > settings.MAX_SPREAD_PIPS:
+            self.logger.info(
+                f"{pair}: spread gate blocked — spread {spread_pips:.1f} pips "
+                f"exceeds max {settings.MAX_SPREAD_PIPS:.1f}"
+            )
+            return
 
         # Fetch higher-timeframe candles for MTF bias (non-fatal)
         htf_candles: dict = {}
@@ -463,6 +499,13 @@ class TradingEngine:
         if not _is_adx_trending(result.indicators):
             self.logger.info(
                 f"{pair}: REJECTED — ADX below 20, market is ranging (ADX={result.indicators.get('adx')})"
+            )
+            return
+
+        # Phase 1.0a: H4 trend alignment hard gate — never fight the higher timeframe
+        if settings.HTF_ALIGNMENT_ENABLED and not _htf_trend_aligned(htf_candles.get('H4'), is_long):
+            self.logger.info(
+                f"{pair}: REJECTED — {'BUY' if is_long else 'SELL'} signal contradicts H4 EMA20/50 trend"
             )
             return
 
@@ -590,8 +633,6 @@ class TradingEngine:
         sl_pips_int = max(1, int(sl_pips))
 
         # Phase 1.2: Minimum RR validation
-        from config.pairs import PAIR_INFO
-        pip_value = PAIR_INFO.get(pair, {}).get('pip_value', 0.0001)
         tp_pips = abs(take_profit - entry_price) / pip_value
         rr_ratio = tp_pips / sl_pips if sl_pips > 0 else 0.0
         min_rr = settings.MIN_RR_RATIO
@@ -601,11 +642,19 @@ class TradingEngine:
             )
             return
 
-        # Position size
+        # Position size — halve risk while on a losing streak
+        risk_percent = None
+        if self._consecutive_losses >= settings.CONSECUTIVE_LOSS_RISK_REDUCTION_AFTER:
+            risk_percent = settings.MAX_RISK_PER_TRADE / 2
+            self.logger.info(
+                f"{pair}: {self._consecutive_losses} consecutive losses — "
+                f"risk reduced to {risk_percent:.2%} for this trade"
+            )
         size_result = self.position_sizer.calculate(
             pair=pair,
             account_balance=account.balance,
             stop_loss_pips=sl_pips_int,
+            risk_percent=risk_percent,
             method=PositionSizingMethod.PERCENT_RISK,
             current_price=entry_price,
         )
@@ -750,6 +799,8 @@ class TradingEngine:
                     f"{' (estimated)' if pnl_estimated else ''} | {reason_label}"
                 )
 
+                self._record_trade_outcome(trade.pair, realized_pnl)
+
                 self.alert_manager.alert_trade_closed(
                     pair=trade.pair,
                     pnl=realized_pnl,
@@ -771,6 +822,44 @@ class TradingEngine:
         with self._trades_lock:
             for t in current_trades:
                 self._known_open_trades[t.trade_id] = t
+
+    def _record_trade_outcome(self, pair: str, realized_pnl: float) -> None:
+        """Track losing streaks: per-pair re-entry cooldown plus global throttle/halt."""
+        if realized_pnl < 0:
+            self._pair_loss_cooldown[pair] = (
+                datetime.utcnow() + timedelta(hours=settings.LOSS_COOLDOWN_HOURS)
+            )
+            self._consecutive_losses += 1
+            self.logger.info(
+                f"{pair}: losing close recorded — consecutive losses now "
+                f"{self._consecutive_losses}, pair cooldown {settings.LOSS_COOLDOWN_HOURS:.0f}h"
+            )
+            if (
+                not self._loss_streak_halted
+                and self._consecutive_losses >= settings.MAX_CONSECUTIVE_LOSSES
+            ):
+                self._loss_streak_halted = True
+                self.logger.critical(
+                    f"{self._consecutive_losses} consecutive losses — halting new trades "
+                    f"for the rest of the day"
+                )
+                self.alert_manager.alert_error(
+                    f"Loss streak limit reached ({self._consecutive_losses} consecutive losses) "
+                    f"— new trades halted until tomorrow"
+                )
+        elif realized_pnl > 0:
+            self._consecutive_losses = 0
+
+    def _in_trading_session(self) -> bool:
+        """True when new entries are allowed by the UTC session window."""
+        if not settings.SESSION_FILTER_ENABLED:
+            return True
+        hour = datetime.utcnow().hour
+        start = settings.SESSION_START_UTC_HOUR
+        end = settings.SESSION_END_UTC_HOUR
+        if start <= end:
+            return start <= hour < end
+        return hour >= start or hour < end  # window wraps midnight
 
     # ------------------------------------------------------------------
     # Emergency risk check
@@ -816,8 +905,6 @@ class TradingEngine:
         is_long: bool,
     ):
         """Return (sl_pips, stop_loss_price, take_profit_price, atr_val)."""
-        from config.pairs import PAIR_INFO
-
         pip_value = PAIR_INFO.get(pair, {}).get('pip_value', 0.0001)
         atr_val = _calc_atr(candles)
 
@@ -1047,6 +1134,26 @@ def _count_indicator_confluences(
     return len(aligned), aligned
 
 
+def _htf_trend_aligned(h4_candles: Optional[List[Dict]], is_long: bool) -> bool:
+    """
+    True when the H4 EMA20/50 trend agrees with the trade direction.
+    Missing or insufficient data is treated as aligned (gate only blocks on
+    a clear contradiction, mirroring the M15 momentum gate's design).
+    """
+    if not h4_candles or len(h4_candles) < 55:
+        return True
+    try:
+        from src.agents.indicators import ema, to_dataframe
+        df = to_dataframe(h4_candles)
+        ema20 = ema(df, 20)
+        ema50 = ema(df, 50)
+    except Exception:
+        return True
+    if ema20 is None or ema50 is None:
+        return True
+    return ema20 > ema50 if is_long else ema20 < ema50
+
+
 def _is_adx_trending(indicators: dict, min_adx: float = 20.0) -> bool:
     """Return True if ADX confirms a trending market (strength gate, direction-agnostic)."""
     adx_val = indicators.get('adx')
@@ -1088,7 +1195,6 @@ def _infer_close_reason(trade, close_price: float) -> str:
 
 def _estimate_pnl(trade, close_price: float) -> float:
     """Estimate realized P/L in USD when OANDA API data is unavailable."""
-    from config.pairs import PAIR_INFO
     quote = PAIR_INFO.get(trade.pair, {}).get('quote_currency', 'USD')
     diff = (close_price - trade.entry_price) if trade.is_long else (trade.entry_price - close_price)
     if quote == 'USD':

@@ -54,9 +54,15 @@ Every cycle per pair:
 9. **Phase 1 trade quality filters** (applied after reviewer APPROVED/ADJUSTED):
    - **Confluence gate** — counts indicator signals aligned with direction (RSI, MACD, EMA trend, ADX, Fisher, Bollinger, Market Structure). Rejects if `confluence_count < MIN_CONFLUENCES` (default 3). Deterministic — reads from indicators dict, not LLM text
    - **Setup type quality filter** — RANGE and NONE are rejected outright. Lower-quality setups (REVERSAL) require higher minimum confidence
-   - **Minimum RR validation** — rejects if `tp_pips / sl_pips < MIN_RR_RATIO` (default 2.5)
+   - **Minimum RR validation** — rejects if `tp_pips / sl_pips < MIN_RR_RATIO` (default 2.0)
    - **M15 momentum gate** — rejects if the last 5 × 15-minute candles show momentum clearly contradicting the signal direction
-10. If either AI provider is unavailable → HOLD, Telegram alert fired. Provider hierarchy: Groq (primary) → Anthropic (fallback) → HOLD
+   - **H4 trend alignment gate** — rejects if the trade direction contradicts the H4 EMA20/50 trend (`HTF_ALIGNMENT_ENABLED`, default on)
+10. **Phase 2 entry quality gates** (applied before the LLM is even called — saves API cost):
+   - **Session filter** — new entries only between `SESSION_START_UTC_HOUR` and `SESSION_END_UTC_HOUR` (default 06:00–20:00 UTC); avoids the rollover spread spike and thin Asian-session liquidity
+   - **Spread gate** — skips the pair when the live spread exceeds `MAX_SPREAD_PIPS` (default 3.0)
+   - **Post-loss cooldown** — after a losing close, the pair is blocked for `LOSS_COOLDOWN_HOURS` (default 4) to prevent immediate re-entry into a failed setup
+   - **Consecutive-loss throttle** — after `CONSECUTIVE_LOSS_RISK_REDUCTION_AFTER` (default 3) straight losses, risk per trade is halved; after `MAX_CONSECUTIVE_LOSSES` (default 5), new trades halt for the rest of the day (streak resets on a win or at the daily rollover)
+11. If either AI provider is unavailable → HOLD, Telegram alert fired. Provider hierarchy: Groq (primary) → Anthropic (fallback) → HOLD
 
 ---
 
@@ -97,9 +103,10 @@ Trades are closed under the following conditions:
 |---------|--------|
 | **Stop Loss** | Broker-side order. SL distance = adaptive ATR multiplier × ATR. Multiplier is 1.5× (quiet market), 2.0× (normal), or 3.0× (high volatility) — chosen by comparing current ATR against the 50-bar ATR average. Fallback to `DEFAULT_STOP_LOSS_PIPS` if ATR unavailable |
 | **Take Profit** | Broker-side order. TP = `SL distance × DEFAULT_TAKE_PROFIT_RATIO` (default 2.0 = 1:2 RR) |
-| **Break-even stop + partial close** | At `BREAK_EVEN_ACTIVATION_PIPS` (default 5) profit → SL moves to entry + `BREAK_EVEN_BUFFER_PIPS` (default 1) AND closes `PARTIAL_TP_RATIO` (default 50%) of position simultaneously. Triggered once per trade. Disable partial close with `PARTIAL_TP_ENABLED=false` |
-| **Partial take-profit** | Fires alongside break-even (see above). The 1:1 RR trigger (`PARTIAL_TP_RR_TARGET`) is now superseded — partial close happens at break-even pips, not at SL-distance pips |
-| **Trailing stop** | Activates after `TRAILING_STOP_ACTIVATION_PIPS` (default 7) pips profit; trails ATR × 1.5 in price behind the peak (ATR stored at trade entry). Falls back to `TRAILING_STOP_DISTANCE_PIPS` × pip size if ATR unavailable. State persisted to `data/managed_trades.json` — survives restarts |
+| **Break-even stop** | SL moves to entry + `BREAK_EVEN_BUFFER_PIPS` (default 1) once profit reaches `BREAK_EVEN_TRIGGER_R` (default 0.5) × the initial SL distance — i.e. at +0.5R, scaled to the trade's actual stop, not a fixed pip count. Falls back to `BREAK_EVEN_ACTIVATION_PIPS` (default 5) when the initial SL is unknown. Triggered once per trade |
+| **Partial take-profit** | Closes `PARTIAL_TP_RATIO` (default 50%) of the position at `PARTIAL_TP_RR_TARGET` (default 1.0 = 1R) profit, then moves SL to break-even. Disable with `PARTIAL_TP_ENABLED=false` |
+| **Trailing stop** | Activates after profit reaches `TRAILING_STOP_ACTIVATION_R` (default 1.0) × the initial SL distance (falls back to `TRAILING_STOP_ACTIVATION_PIPS` when initial SL unknown); trails ATR × `TRAILING_ATR_MULTIPLIER` (default 1.5) in price behind the peak (ATR stored at trade entry). Falls back to `TRAILING_STOP_DISTANCE_PIPS` × pip size if ATR unavailable. State persisted to `data/managed_trades.json` — survives restarts |
+| **Time stop** | A trade still losing after `TIME_STOP_HOURS` (default 48) market hours is closed — the entry thesis has expired. Winners are left to run. Disable with `TIME_STOP_ENABLED=false` |
 | **Trade age alert** | Fires after 72 market hours open (weekends Fri 22:00–Sun 22:00 UTC excluded) |
 | **Exposure breach** | Total exposure >150% of `MAX_TOTAL_EXPOSURE` → emergency close all |
 | **Max drawdown** | Account down ≥20% from starting balance → emergency shutdown |
@@ -108,7 +115,7 @@ Trades are closed under the following conditions:
 | **Large unrealized loss** | Floating loss >15% of account → critical alert, positions flagged |
 | **Manual** | Telegram `/stop`, kill switch file, or `emergency_close_all()` |
 
-**Sequence per open trade each cycle:** break-even check (moves SL + closes 50% if `PARTIAL_TP_ENABLED`) → partial TP check (no-op if break-even already fired) → trailing stop check.
+**Sequence per open trade each cycle:** time-stop check (closes stale losers) → break-even check (moves SL only) → partial TP check (closes 50% at 1R + moves SL to break-even) → trailing stop check.
 
 Note: the weekend guard, holiday guard, and kill switch block **new** trades only. Existing open positions remain active and protected by broker-side SL/TP.
 
@@ -155,17 +162,30 @@ Copy `.env.template` to `.env` and fill in all values before deployment.
 |----------|---------|-------------|
 | `CONSENSUS_THRESHOLD` | `0.60` | Minimum analyst confidence to proceed to reviewer |
 | `MIN_CONFLUENCES` | `3` | Minimum indicator confluences required to place a trade |
-| `MIN_RR_RATIO` | `2.5` | Minimum risk:reward ratio (tp_pips / sl_pips) to proceed |
+| `MIN_RR_RATIO` | `2.0` | Minimum risk:reward ratio (tp_pips / sl_pips) to proceed — must not exceed `DEFAULT_TAKE_PROFIT_RATIO` or every trade is rejected |
 | `MAX_RISK_PER_TRADE` | `0.02` | Max risk per trade as fraction of balance (2%) |
 | `DEFAULT_TAKE_PROFIT_RATIO` | `2.0` | TP = SL distance × this ratio (1:2 RR) |
 | `MAX_DAILY_LOSS_PERCENT` | `0.06` | Daily loss limit before trading halts (6%) |
-| `TRAILING_STOP_ACTIVATION_PIPS` | `7.0` | Pips in profit before trailing stop activates |
-| `TRAILING_STOP_DISTANCE_PIPS` | `3.0` | Pips the stop trails behind the peak price |
-| `BREAK_EVEN_ACTIVATION_PIPS` | `5.0` | Pips in profit before SL moves to break-even |
+| `MAX_SPREAD_PIPS` | `3.0` | Max live spread (pips) to allow a new entry |
+| `SESSION_FILTER_ENABLED` | `true` | Restrict new entries to the UTC session window |
+| `SESSION_START_UTC_HOUR` | `6` | Session window start (UTC hour, inclusive) |
+| `SESSION_END_UTC_HOUR` | `20` | Session window end (UTC hour, exclusive) |
+| `HTF_ALIGNMENT_ENABLED` | `true` | Require trade direction to match H4 EMA20/50 trend |
+| `LOSS_COOLDOWN_HOURS` | `4.0` | Hours a pair is blocked after a losing close |
+| `CONSECUTIVE_LOSS_RISK_REDUCTION_AFTER` | `3` | Consecutive losses before risk per trade is halved |
+| `MAX_CONSECUTIVE_LOSSES` | `5` | Consecutive losses before new trades halt for the day |
+| `TRAILING_STOP_ACTIVATION_R` | `1.0` | Profit (× initial SL distance) before trailing activates |
+| `TRAILING_ATR_MULTIPLIER` | `1.5` | Trailing distance = ATR × this multiplier |
+| `TRAILING_STOP_ACTIVATION_PIPS` | `15.0` | Fallback activation (pips) when initial SL unknown |
+| `TRAILING_STOP_DISTANCE_PIPS` | `8.0` | Fallback trail distance (pips) when ATR unavailable |
+| `BREAK_EVEN_TRIGGER_R` | `0.5` | Profit (× initial SL distance) before SL moves to break-even |
+| `BREAK_EVEN_ACTIVATION_PIPS` | `5.0` | Fallback break-even trigger (pips) when initial SL unknown |
 | `BREAK_EVEN_BUFFER_PIPS` | `1.0` | Buffer above entry when setting break-even SL |
-| `PARTIAL_TP_ENABLED` | `true` | Enable partial close when break-even is triggered (fires at `BREAK_EVEN_ACTIVATION_PIPS`) |
-| `PARTIAL_TP_RATIO` | `0.5` | Fraction of position to close at break-even (50%) |
-| `PARTIAL_TP_RR_TARGET` | `1.0` | Legacy — no longer the primary trigger; partial close now fires at break-even pips |
+| `PARTIAL_TP_ENABLED` | `true` | Enable partial close at the RR target |
+| `PARTIAL_TP_RATIO` | `0.5` | Fraction of position to close at the partial TP (50%) |
+| `PARTIAL_TP_RR_TARGET` | `1.0` | Partial TP fires at this R multiple of the initial SL distance |
+| `TIME_STOP_ENABLED` | `true` | Close trades still losing after `TIME_STOP_HOURS` |
+| `TIME_STOP_HOURS` | `48.0` | Market hours before a losing trade is time-stopped |
 | `MAX_USD_CORRELATED_TRADES` | `2` | Max open trades in the same USD-directional bucket |
 | `PAPER_TRADING_MODE` | `true` | Set to `false` when going live |
 | `EXECUTION_INTERVAL_SECONDS` | `3600` | Cycle interval in seconds (1 hour) |
