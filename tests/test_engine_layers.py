@@ -335,6 +335,9 @@ def _make_engine_with_suspension(is_suspended: bool):
     engine.suspension_manager = MagicMock()
     engine.suspension_manager.check_suspension_status.return_value = status
 
+    # Keep tests deterministic regardless of wall-clock time
+    engine._in_trading_session = MagicMock(return_value=True)
+
     return engine
 
 
