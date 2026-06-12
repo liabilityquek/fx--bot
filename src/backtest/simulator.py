@@ -128,6 +128,9 @@ class BacktestSimulator:
     def run(self, candles_by_pair: Dict[str, List[Dict]]) -> BacktestResult:
         cfg = self.config
         window_len = settings.H1_CANDLE_COUNT
+        bar_seconds = {'M15': 900, 'M30': 1800, 'H1': 3600, 'H4': 14400}.get(
+            cfg.granularity, 3600
+        )
 
         pair_data: Dict[str, dict] = {}
         for pair, candles in candles_by_pair.items():
@@ -192,7 +195,7 @@ class BacktestSimulator:
                 if pending is not None:
                     gap_seconds = (ts - pending['decided_at']).total_seconds()
                     # Discard stale pendings (weekend gap) and out-of-session fills
-                    if gap_seconds <= 2 * 3600 and _in_session(ts):
+                    if gap_seconds <= 2 * bar_seconds and _in_session(ts):
                         open_px = float(bar['open'])
                         if pending['kind'] == 'flip_exit' and d['position'] is not None:
                             balance += self._close_position(

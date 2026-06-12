@@ -33,17 +33,31 @@ class PositionSizeResult:
 
 class PositionSizer:
     """Calculate position sizes based on risk parameters."""
-    
+
     def __init__(self, logger: Optional[logging.Logger] = None):
         """
         Initialize position sizer.
-        
+
         Args:
             logger: Logger instance (optional)
         """
         self.logger = logger or logging.getLogger('position_sizer')
         self.max_leverage = settings.MAX_LEVERAGE
         self.max_risk_per_trade = settings.MAX_RISK_PER_TRADE
+
+    @staticmethod
+    def _usd_notional(pair: str, units: int, current_price: Optional[float]) -> float:
+        """USD notional value of a position.
+
+        One unit is one unit of the BASE currency, so:
+        - USD_XXX pairs (USD_JPY, USD_CHF): base is USD — notional = units.
+        - XXX_USD pairs (EUR_USD, ...): 1 base unit = price USD — notional = units x price.
+        Multiplying USD_JPY units by the ~150 price overstated notional ~150x and
+        made the leverage cap squeeze positions to ~1/150th of intended size.
+        """
+        if pair.split('_')[0] == 'USD':
+            return float(units)
+        return units * (current_price or 1.0)
     
     def calculate(
         self,
@@ -166,14 +180,15 @@ class PositionSizer:
         actual_risk_percent = actual_risk_amount / account_balance
 
         # Calculate leverage
-        notional_value = units * (current_price or 1.0)
+        notional_value = self._usd_notional(pair, units, current_price)
         leverage_used = notional_value / account_balance
 
         # Check constraints
         notes = ""
         if leverage_used > self.max_leverage:
             # Recalculate with max leverage constraint
-            max_units = int(account_balance * self.max_leverage / (current_price or 1.0))
+            unit_notional = self._usd_notional(pair, 1, current_price)
+            max_units = int(account_balance * self.max_leverage / unit_notional)
             if max_units < units:
                 units = max_units
                 pip_value = self._get_pip_value(pair, units, current_price)
@@ -317,10 +332,10 @@ class PositionSizer:
         """
         # Maximum notional value = account balance × max leverage
         max_notional = account_balance * self.max_leverage
-        
-        # Position size = max notional / current price
-        max_units = int(max_notional / current_price)
-        
+
+        # Position size = max notional / USD notional per unit
+        max_units = int(max_notional / self._usd_notional(pair, 1, current_price))
+
         return max_units
     
     def validate_position_size(
@@ -351,13 +366,17 @@ class PositionSizer:
             return False, f"Position size {units} below minimum {pair_info['min_trade_units']}"
         
         # Check leverage limit
-        notional_value = units * current_price
+        notional_value = self._usd_notional(pair, units, current_price)
         leverage = notional_value / account_balance
-        
+
         if leverage > self.max_leverage:
+            max_units = int(
+                account_balance * self.max_leverage
+                / self._usd_notional(pair, 1, current_price)
+            )
             return False, (
                 f"Leverage {leverage:.1f}:1 exceeds maximum {self.max_leverage}:1 "
-                f"(max units: {int(account_balance * self.max_leverage / current_price)})"
+                f"(max units: {max_units})"
             )
         
         return True, "Position size valid"
