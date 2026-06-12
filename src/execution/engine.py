@@ -495,6 +495,11 @@ class TradingEngine:
 
         is_long = result.final_signal == Signal.BUY
 
+        # Strategy mode: an opposite SuperTrend signal closes the open position on
+        # this pair (the flip IS the exit) — runs before the entry gates so the
+        # stale position is closed even when the new entry is rejected downstream.
+        positions = self._handle_strategy_flip_exit(pair, is_long, positions)
+
         # Phase 1.0: ADX trending pre-gate — reject trades in ranging/choppy markets
         if not _is_adx_trending(result.indicators):
             self.logger.info(
@@ -822,6 +827,54 @@ class TradingEngine:
         with self._trades_lock:
             for t in current_trades:
                 self._known_open_trades[t.trade_id] = t
+
+    def _handle_strategy_flip_exit(self, pair: str, is_long: bool, positions):
+        """Close an opposite-direction position when the strategy signal flips.
+
+        Only active in strategy mode with STRATEGY_EXIT_ON_FLIP enabled. Returns
+        the (possibly refreshed) positions list so downstream checks see the
+        post-close state.
+        """
+        if settings.STRATEGY_MODE != 'strategy' or not settings.STRATEGY_EXIT_ON_FLIP:
+            return positions
+        if self.dry_run:
+            return positions
+
+        has_opposite = any(
+            p.pair == pair and not p.is_flat
+            and ((is_long and p.is_short) or (not is_long and p.is_long))
+            for p in positions
+        )
+        if not has_opposite:
+            return positions
+
+        self.logger.info(
+            f"{pair}: SuperTrend flip against open position — closing before "
+            f"{'BUY' if is_long else 'SELL'} entry"
+        )
+        closed_any = False
+        try:
+            results = self.trade_manager.close_all_trades(reason='strategy_flip', pairs={pair})
+            for r in results:
+                if r.success:
+                    closed_any = True
+                    self.remove_known_trade(r.trade_id)
+                    self._record_trade_outcome(pair, r.pnl)
+        except Exception as exc:
+            self.logger.error(f"{pair}: flip exit via trade manager failed: {exc}")
+
+        if not closed_any:
+            # Position exists at broker but isn't managed (e.g. opened pre-restart)
+            try:
+                self.broker.close_position(pair)
+            except Exception as exc:
+                self.logger.error(f"{pair}: flip exit close_position failed: {exc}")
+                return positions
+
+        try:
+            return self.broker.get_positions()
+        except Exception:
+            return [p for p in positions if p.pair != pair]
 
     def _record_trade_outcome(self, pair: str, realized_pnl: float) -> None:
         """Track losing streaks: per-pair re-entry cooldown plus global throttle/halt."""

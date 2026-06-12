@@ -575,6 +575,37 @@ The bot connects to several external services:
 
 ---
 
+## Strategy Mode (No AI)
+
+Setting `STRATEGY_MODE=strategy` swaps the two AIs for a fully mechanical,
+battle-tested TradingView strategy: **SuperTrend + EMA200**.
+
+- SuperTrend draws a volatility band (3 × ATR) that trails the price. When the
+  price closes through the band, the trend "flips" — that flip is the entry
+  signal.
+- The EMA200 filter only allows trades in the direction of the long-term trend:
+  buys above the 200-bar average, sells below it. Counter-trend flips are
+  ignored.
+- An opposite flip closes the open trade — the flip IS the exit.
+- Every safety layer from the AI mode still applies: session window, spread
+  gate, post-loss cooldown, ADX gate, H4 alignment, confluence count, position
+  sizing, break-even / partial TP / trailing / time-stop management.
+
+Because no AI is consulted, this mode costs nothing to run and is fully
+backtestable. Before using it live, run the included backtest on real OANDA
+history:
+
+```bash
+python scripts/backtest.py --pairs EUR_USD,GBP_USD,USD_JPY,USD_CHF,AUD_USD --years 5
+```
+
+The report shows trades, win rate, profit factor, average R, max drawdown,
+exit-reason breakdown, per-pair stats, and the most recent 12 months separately.
+If the numbers don't satisfy you, don't trade it — the harness exists so the
+decision is made with evidence, not hope.
+
+---
+
 ## Summary: Why This Bot Exists
 
 Most people cannot watch currency markets 24 hours a day, do complex maths in real time, check news and announcements, and stay disciplined enough not to panic during losses. The bot does all of that automatically.

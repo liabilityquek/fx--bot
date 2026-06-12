@@ -60,9 +60,23 @@ class DecisionEngine:
         self._tech     = TechAgent(logger)
         self._trend    = TrendAgent(logger)
         self._momentum = MomentumAgent(logger)
-        self._llm      = LLMAgent(logger)
-        self._reviewer = ReviewerAgent(logger)
-        self._macro    = MacroContext(event_monitor=event_monitor, logger=logger)
+
+        if settings.STRATEGY_MODE == 'strategy':
+            # Deterministic pipeline — no LLM clients, no network, no API keys
+            from src.strategies import SuperTrendEmaStrategy
+            self._strategy = SuperTrendEmaStrategy(logger)
+            self._llm      = None
+            self._reviewer = None
+            self._macro    = None
+            self.logger.info(
+                f"DecisionEngine: strategy mode active ({self._strategy.name}) — "
+                f"LLM analyst and reviewer disabled"
+            )
+        else:
+            self._strategy = None
+            self._llm      = LLMAgent(logger)
+            self._reviewer = ReviewerAgent(logger)
+            self._macro    = MacroContext(event_monitor=event_monitor, logger=logger)
 
         self._last_results: dict = {}   # pair -> DecisionResult
 
@@ -79,6 +93,27 @@ class DecisionEngine:
         indicators.update(self._tech.get_indicators(pair, candles, price))
         indicators.update(self._trend.get_indicators(pair, candles, price))
         indicators.update(self._momentum.get_indicators(pair, candles, price))
+
+        # 1b. Strategy mode — deterministic signal, no LLM or reviewer involved
+        if self._strategy is not None:
+            vote = self._strategy.vote(
+                pair, candles, price, indicators, htf_candles=htf_candles
+            )
+            final_signal = vote.signal if vote.confidence >= threshold else Signal.HOLD
+            result = DecisionResult(
+                pair=pair,
+                final_signal=final_signal,
+                confidence=round(vote.confidence, 4),
+                llm_reasoning=vote.reasoning,
+                llm_available=True,
+                reviewer_verdict='SKIPPED',
+                reviewer_reason='strategy mode — deterministic pipeline',
+                reviewer_available=True,
+                setup_type=vote.setup_type,
+                indicators=indicators,
+            )
+            self._last_results[pair] = result
+            return result
 
         # 2. Build macro context (fails silently)
         macro: dict = {}
@@ -167,6 +202,13 @@ class DecisionEngine:
 
     def get_llm_provider_status(self) -> str:
         """Return human-readable status for both analyst and reviewer providers."""
+        if self._strategy is not None:
+            return (
+                f"Strategy mode — LLM analyst and reviewer disabled.\n"
+                f"Active strategy: {self._strategy.name} "
+                f"(SuperTrend {settings.STRATEGY_SUPERTREND_PERIOD}/"
+                f"{settings.STRATEGY_SUPERTREND_MULTIPLIER} + EMA{settings.STRATEGY_EMA_PERIOD})"
+            )
         groq_ok    = not self._llm._groq_exhausted and self._llm._groq_client is not None
         ant_ok     = not self._llm._anthropic_exhausted and self._llm._anthropic_client is not None
         rev_groq_ok = not self._reviewer._groq_exhausted and self._reviewer._groq_client is not None

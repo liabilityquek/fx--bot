@@ -642,6 +642,9 @@ class TradeManager:
             elif reason in ('time_stop',):
                 reason_label = 'Time Stop (stale losing trade)'
                 raw_reason = 'time_stop'
+            elif reason in ('strategy_flip',):
+                reason_label = 'SuperTrend Flip Exit'
+                raw_reason = 'strategy_flip'
             else:
                 reason_label = 'Closed by User'
                 raw_reason = 'user'

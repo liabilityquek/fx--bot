@@ -119,6 +119,7 @@ def main():
     weekend_guard = WeekendGuard(logger=logger)
     holiday_guard = HolidayGuard(logger=logger)
     event_monitor = EventMonitor(logger)
+    logger.info(f"Decision mode: {settings.STRATEGY_MODE.upper()}")
     decision_engine = DecisionEngine(logger, alert_manager=alert_manager, event_monitor=event_monitor)
 
     if args.test:

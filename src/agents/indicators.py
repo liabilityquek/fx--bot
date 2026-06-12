@@ -241,6 +241,98 @@ def fisher_transform(
 
 
 # ---------------------------------------------------------------------------
+# SuperTrend — ATR band trailing trend indicator
+# ---------------------------------------------------------------------------
+
+def supertrend(
+    df: pd.DataFrame,
+    period: int = 10,
+    multiplier: float = 3.0,
+) -> Optional[Tuple[int, int, float, int]]:
+    """Standard ratcheting SuperTrend.
+
+    Uses the rolling-mean ATR (same variant as atr()) so the indicator stays
+    consistent with the bot's SL/TP calculations. Values therefore differ
+    slightly from TradingView's default Wilder-smoothed ATR variant.
+
+    Returns:
+        (direction_now, direction_prev, line_now, flip_age) or None.
+        direction: +1 bullish (price above the line), -1 bearish.
+        line_now: current SuperTrend line value (the active band).
+        flip_age: closed bars since the last direction change
+                  (0 = flipped on the last closed bar).
+    """
+    if len(df) < period + 5:
+        return None
+
+    high = df['high']
+    low = df['low']
+    close = df['close']
+
+    prev_close = close.shift(1)
+    tr = pd.concat([
+        high - low,
+        (high - prev_close).abs(),
+        (low - prev_close).abs(),
+    ], axis=1).max(axis=1)
+    atr_series = tr.rolling(window=period).mean()
+
+    hl2 = (high + low) / 2
+    upper_basic = hl2 + multiplier * atr_series
+    lower_basic = hl2 - multiplier * atr_series
+
+    first = atr_series.first_valid_index()
+    if first is None:
+        return None
+    start = df.index.get_loc(first)
+    n = len(df)
+    if n - start < 3:
+        return None
+
+    final_upper = np.zeros(n)
+    final_lower = np.zeros(n)
+    direction = np.zeros(n, dtype=int)
+
+    closes = close.to_numpy()
+    ub = upper_basic.to_numpy()
+    lb = lower_basic.to_numpy()
+
+    final_upper[start] = ub[start]
+    final_lower[start] = lb[start]
+    direction[start] = 1 if closes[start] > ub[start] else -1
+
+    for i in range(start + 1, n):
+        # Bands ratchet: upper only moves down (or resets when price closed above it)
+        if ub[i] < final_upper[i - 1] or closes[i - 1] > final_upper[i - 1]:
+            final_upper[i] = ub[i]
+        else:
+            final_upper[i] = final_upper[i - 1]
+
+        if lb[i] > final_lower[i - 1] or closes[i - 1] < final_lower[i - 1]:
+            final_lower[i] = lb[i]
+        else:
+            final_lower[i] = final_lower[i - 1]
+
+        # Direction flips when close crosses the active band
+        if direction[i - 1] == 1:
+            direction[i] = -1 if closes[i] < final_lower[i] else 1
+        else:
+            direction[i] = 1 if closes[i] > final_upper[i] else -1
+
+    line_now = final_lower[-1] if direction[-1] == 1 else final_upper[-1]
+    if math.isnan(line_now):
+        return None
+
+    flip_age = 0
+    for i in range(n - 1, start, -1):
+        if direction[i] != direction[i - 1]:
+            break
+        flip_age += 1
+
+    return int(direction[-1]), int(direction[-2]), float(line_now), flip_age
+
+
+# ---------------------------------------------------------------------------
 # Market Structure — swing high/low classification
 # ---------------------------------------------------------------------------
 

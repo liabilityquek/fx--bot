@@ -51,10 +51,29 @@ class Settings:
     REVIEWER_LLM_MODEL: str = os.getenv('REVIEWER_LLM_MODEL', 'llama-3.1-8b-instant')
 
     # ==========================================
+    # DETERMINISTIC STRATEGY MODE
+    # ==========================================
+    # 'llm' (default): LLM analyst + reviewer pipeline.
+    # 'strategy': deterministic SuperTrend+EMA200 signals, no LLM calls at all.
+    STRATEGY_MODE: str = os.getenv('STRATEGY_MODE', 'llm').lower()
+    STRATEGY_EXIT_ON_FLIP: bool = os.getenv('STRATEGY_EXIT_ON_FLIP', 'true').lower() == 'true'
+    STRATEGY_SUPERTREND_PERIOD: int = int(os.getenv('STRATEGY_SUPERTREND_PERIOD', '10'))
+    STRATEGY_SUPERTREND_MULTIPLIER: float = float(os.getenv('STRATEGY_SUPERTREND_MULTIPLIER', '3.0'))
+    STRATEGY_EMA_PERIOD: int = int(os.getenv('STRATEGY_EMA_PERIOD', '200'))
+    # A flip remains tradeable for this many closed bars (session/spread gates can
+    # block the exact flip candle, so a small window preserves live/backtest parity).
+    STRATEGY_SIGNAL_VALIDITY_BARS: int = int(os.getenv('STRATEGY_SIGNAL_VALIDITY_BARS', '3'))
+    STRATEGY_BASE_CONFIDENCE: float = float(os.getenv('STRATEGY_BASE_CONFIDENCE', '0.70'))
+
+    # ==========================================
     # VOTING ENGINE
     # ==========================================
     CONSENSUS_THRESHOLD: float = float(os.getenv('CONSENSUS_THRESHOLD', '0.60'))
-    H1_CANDLE_COUNT: int = int(os.getenv('H1_CANDLE_COUNT', '100'))
+    # Strategy mode needs >= EMA period + 10 bars for EMA200 + slope lookback
+    H1_CANDLE_COUNT: int = int(os.getenv(
+        'H1_CANDLE_COUNT',
+        '250' if os.getenv('STRATEGY_MODE', 'llm').lower() == 'strategy' else '100'
+    ))
     M15_CANDLE_COUNT: int = int(os.getenv('M15_CANDLE_COUNT', '100'))
     H4_CANDLE_COUNT: int = int(os.getenv('H4_CANDLE_COUNT', '60'))
     D1_CANDLE_COUNT: int = int(os.getenv('D1_CANDLE_COUNT', '60'))
@@ -212,7 +231,17 @@ class Settings:
         if not cls.OANDA_ACCOUNT_ID:
             errors.append("OANDA_ACCOUNT_ID is required")
 
-        if not cls.GROQ_API_KEY:
+        if cls.STRATEGY_MODE not in ('llm', 'strategy'):
+            errors.append(f"Invalid STRATEGY_MODE: '{cls.STRATEGY_MODE}' (expected 'llm' or 'strategy')")
+
+        if cls.STRATEGY_MODE == 'strategy':
+            min_bars = cls.STRATEGY_EMA_PERIOD + 10
+            if cls.H1_CANDLE_COUNT < min_bars:
+                errors.append(
+                    f"H1_CANDLE_COUNT={cls.H1_CANDLE_COUNT} too low for strategy mode "
+                    f"(EMA{cls.STRATEGY_EMA_PERIOD} needs >= {min_bars} bars)"
+                )
+        elif not cls.GROQ_API_KEY:
             errors.append("GROQ_API_KEY is required (LLM agent will fall back to HOLD without it)")
 
         # Validate each trading pair name

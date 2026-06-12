@@ -36,6 +36,31 @@ TradingEngine (H1 loop)
 
 ---
 
+## Decision Modes
+
+The bot runs in one of two modes (`STRATEGY_MODE` env var):
+
+- **`llm`** (default) — the LLM analyst + reviewer pipeline described below.
+- **`strategy`** — deterministic **SuperTrend(10, 3.0) + EMA200** trend-following.
+  No LLM calls at all (zero API cost). BUY when SuperTrend flips bullish within
+  the last `STRATEGY_SIGNAL_VALIDITY_BARS` closed H1 bars AND close > EMA200;
+  SELL on the mirror condition. An opposite flip closes the open position
+  (`STRATEGY_EXIT_ON_FLIP`). All deterministic quality gates (ADX, H4 alignment,
+  confluences, session/spread/cooldown) and the full trade-management suite stay
+  active. Validate with the backtest harness before going live:
+
+  ```bash
+  python scripts/backtest.py --pairs EUR_USD,GBP_USD,USD_JPY,USD_CHF,AUD_USD --years 5
+  ```
+
+  The backtest downloads real OANDA H1 candles (paginated, cached under
+  `data/backtest/`), replays the strategy with the same SL/TP/management
+  formulas as live, and reports win rate, profit factor, avg R, and max
+  drawdown per pair plus a last-12-months breakdown. Known live/backtest
+  deltas: M15 momentum gate and news suspensions are not simulated; candles
+  are mid-price with spread modeled as half `typical_spread` per side (stress
+  with `--spread-mult`); H4 bars are UTC-anchored resamples.
+
 ## Decision Logic
 
 Every cycle per pair:
@@ -186,6 +211,13 @@ Copy `.env.template` to `.env` and fill in all values before deployment.
 | `PARTIAL_TP_RR_TARGET` | `1.0` | Partial TP fires at this R multiple of the initial SL distance |
 | `TIME_STOP_ENABLED` | `true` | Close trades still losing after `TIME_STOP_HOURS` |
 | `TIME_STOP_HOURS` | `48.0` | Market hours before a losing trade is time-stopped |
+| `STRATEGY_MODE` | `llm` | `llm` (AI pipeline) or `strategy` (deterministic SuperTrend+EMA200, no LLM calls) |
+| `STRATEGY_EXIT_ON_FLIP` | `true` | Strategy mode: opposite SuperTrend flip closes the open position |
+| `STRATEGY_SUPERTREND_PERIOD` | `10` | SuperTrend ATR period |
+| `STRATEGY_SUPERTREND_MULTIPLIER` | `3.0` | SuperTrend ATR band multiplier |
+| `STRATEGY_EMA_PERIOD` | `200` | Trend filter EMA period (H1_CANDLE_COUNT must be ≥ this + 10; default bumps to 250 in strategy mode) |
+| `STRATEGY_SIGNAL_VALIDITY_BARS` | `3` | A flip stays tradeable for this many closed bars |
+| `STRATEGY_BASE_CONFIDENCE` | `0.70` | Base confidence for strategy signals (bonuses for ADX/EMA separation/slope, decay per bar of flip age) |
 | `MAX_USD_CORRELATED_TRADES` | `2` | Max open trades in the same USD-directional bucket |
 | `PAPER_TRADING_MODE` | `true` | Set to `false` when going live |
 | `EXECUTION_INTERVAL_SECONDS` | `3600` | Cycle interval in seconds (1 hour) |
