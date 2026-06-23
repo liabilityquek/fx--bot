@@ -35,7 +35,7 @@ def _compute_usd_sentiment(pair_prices: dict) -> dict:
         usd_label: 'USD_STRONG' | 'USD_WEAK' | 'NEUTRAL'
     """
     # Pairs where price UP = USD strong
-    usd_strong_when_up = {'USD_JPY', 'USD_CHF'}
+    usd_strong_when_up = {'USD_JPY', 'USD_CAD'}
     # Pairs where price DOWN = USD strong
     usd_strong_when_down = {'EUR_USD', 'GBP_USD', 'AUD_USD'}
 
@@ -78,7 +78,7 @@ _FRED_SERIES = {
     'EUR': 'ECBDFR',          # ECB Deposit Facility Rate
     'GBP': 'IRSTCI01GBM156N', # UK short-term rate (tracks BOE base rate)
     'JPY': 'IRSTCI01JPM156N', # Japan short-term rate (tracks BOJ rate)
-    'CHF': 'IRSTCI01CHM156N', # Switzerland short-term rate (tracks SNB rate)
+    'CAD': 'IRSTCI01CAM156N', # Canada short-term rate (tracks BOC rate)
     'AUD': 'IRSTCI01AUM156N', # Australia short-term rate (tracks RBA rate)
 }
 
@@ -141,7 +141,7 @@ def _get_central_bank_rates() -> dict:
         'EUR': settings.CB_RATE_EUR,
         'GBP': settings.CB_RATE_GBP,
         'JPY': settings.CB_RATE_JPY,
-        'CHF': settings.CB_RATE_CHF,
+        'CAD': settings.CB_RATE_CAD,
         'AUD': settings.CB_RATE_AUD,
     }
     return {**defaults, **cache_snapshot}

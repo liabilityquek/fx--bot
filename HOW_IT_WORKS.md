@@ -17,7 +17,7 @@ The bot does this automatically, all day, every day — but with five currency p
 - **Euro vs US Dollar**
 - **British Pound vs US Dollar**
 - **US Dollar vs Japanese Yen**
-- **US Dollar vs Swiss Franc**
+- **US Dollar vs Canadian Dollar**
 - **Australian Dollar vs US Dollar**
 
 ---

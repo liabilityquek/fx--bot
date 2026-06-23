@@ -1,11 +1,13 @@
 """FX pair definitions and metadata."""
 
+from config.settings import settings
+
 # Trading pairs in OANDA format (underscore separator)
 TRADING_PAIRS = [
     'EUR_USD',
     'GBP_USD',
     'USD_JPY',
-    'USD_CHF',
+    'USD_CAD',
     'AUD_USD'
 ]
 
@@ -17,7 +19,7 @@ PAIR_INFO = {
         'pip_value': 0.0001,
         'min_trade_units': 1,
         'typical_spread': 0.8,  # pips
-        'max_leverage': 50,
+        'max_leverage': settings.MAX_LEVERAGE,
         'base_currency': 'EUR',
         'quote_currency': 'USD'
     },
@@ -27,7 +29,7 @@ PAIR_INFO = {
         'pip_value': 0.0001,
         'min_trade_units': 1,
         'typical_spread': 1.2,
-        'max_leverage': 50,
+        'max_leverage': settings.MAX_LEVERAGE,
         'base_currency': 'GBP',
         'quote_currency': 'USD'
     },
@@ -37,19 +39,19 @@ PAIR_INFO = {
         'pip_value': 0.01,
         'min_trade_units': 1,
         'typical_spread': 0.9,
-        'max_leverage': 50,
+        'max_leverage': settings.MAX_LEVERAGE,
         'base_currency': 'USD',
         'quote_currency': 'JPY'
     },
-    'USD_CHF': {
-        'name': 'US Dollar / Swiss Franc',
+    'USD_CAD': {
+        'name': 'US Dollar / Canadian Dollar',
         'pip_decimal': 4,
         'pip_value': 0.0001,
         'min_trade_units': 1,
         'typical_spread': 1.5,
-        'max_leverage': 50,
+        'max_leverage': settings.MAX_LEVERAGE,
         'base_currency': 'USD',
-        'quote_currency': 'CHF'
+        'quote_currency': 'CAD'
     },
     'AUD_USD': {
         'name': 'Australian Dollar / US Dollar',
@@ -57,7 +59,7 @@ PAIR_INFO = {
         'pip_value': 0.0001,
         'min_trade_units': 1,
         'typical_spread': 1.0,
-        'max_leverage': 50,
+        'max_leverage': settings.MAX_LEVERAGE,
         'base_currency': 'AUD',
         'quote_currency': 'USD'
     }
@@ -71,7 +73,7 @@ def get_pip_value(pair: str, position_size: float = 10000, current_price: float 
     Args:
         pair: Trading pair (e.g., 'EUR_USD')
         position_size: Position size in units (default 10,000 = 0.1 lot)
-        current_price: Live market price — used for accurate conversion on USD_JPY, USD_CHF
+        current_price: Live market price — used for accurate conversion on USD_JPY, USD_CAD
 
     Returns:
         Pip value in USD
@@ -91,11 +93,11 @@ def get_pip_value(pair: str, position_size: float = 10000, current_price: float 
     # Fallback approximations when no live price available
     if pair == 'USD_JPY':
         return (info['pip_value'] * position_size) / 150
-    if pair == 'USD_CHF':
-        return (info['pip_value'] * position_size) / 0.9
+    if pair == 'USD_CAD':
+        return (info['pip_value'] * position_size) / 1.36
 
     return info['pip_value'] * position_size
 
 
-# DEAD CODE — not called by the live pipeline and lacks live-price conversion for USD_JPY/USD_CHF.
+# DEAD CODE — not called by the live pipeline and lacks live-price conversion for USD_JPY/USD_CAD.
 # Use src/risk/position_sizer.py for all position sizing.

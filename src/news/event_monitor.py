@@ -56,7 +56,7 @@ _VERY_HIGH_KEYWORDS = [
 ]
 
 # Currency codes we monitor
-_MONITORED_CURRENCIES = ['USD', 'EUR', 'GBP', 'JPY', 'CHF', 'AUD', 'NZD', 'CAD']
+_MONITORED_CURRENCIES = ['USD', 'EUR', 'GBP', 'JPY', 'AUD', 'NZD', 'CAD']
 
 # jb-news impact string → EventImpact
 _IMPACT_MAP = {

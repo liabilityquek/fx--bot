@@ -80,7 +80,7 @@ class Settings:
     TRADING_PAIRS: List[str] = [
         p.strip() for p in os.getenv(
             'TRADING_PAIRS',
-            'EUR_USD,GBP_USD,USD_JPY,USD_CHF,AUD_USD'
+            'EUR_USD,GBP_USD,USD_JPY,USD_CAD,AUD_USD'
         ).split(',')
     ]
 
@@ -102,7 +102,6 @@ class Settings:
 
     # Trade quality filters (Phase 1)
     MIN_CONFLUENCES: int = int(os.getenv('MIN_CONFLUENCES', '3'))
-    MIN_CONFLUENCES_USD_CHF: int = int(os.getenv('MIN_CONFLUENCES_USD_CHF', '4'))
     # TP is constructed as SL distance x DEFAULT_TAKE_PROFIT_RATIO, so the RR gate
     # default must not exceed that ratio or every signal is rejected.
     MIN_RR_RATIO: float = float(os.getenv('MIN_RR_RATIO', '2.0'))
@@ -191,7 +190,7 @@ class Settings:
     CB_RATE_EUR: float = float(os.getenv('CB_RATE_EUR', '2.40'))
     CB_RATE_GBP: float = float(os.getenv('CB_RATE_GBP', '4.50'))
     CB_RATE_JPY: float = float(os.getenv('CB_RATE_JPY', '0.50'))
-    CB_RATE_CHF: float = float(os.getenv('CB_RATE_CHF', '0.25'))
+    CB_RATE_CAD: float = float(os.getenv('CB_RATE_CAD', '3.75'))
     CB_RATE_AUD: float = float(os.getenv('CB_RATE_AUD', '4.10'))
 
     # ==========================================

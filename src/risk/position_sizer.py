@@ -69,7 +69,7 @@ class PositionSizer:
             kelly_win_rate: Win rate for Kelly criterion (0-1)
             kelly_avg_win: Average win amount
             kelly_avg_loss: Average loss amount
-            current_price: Live market price (used for accurate pip value on USD_JPY, USD_CHF)
+            current_price: Live market price (used for accurate pip value on USD_JPY, USD_CAD)
 
         Returns:
             PositionSizeResult or None if calculation fails
@@ -276,7 +276,7 @@ class PositionSizer:
         Args:
             pair: Trading pair
             position_size: Position size in units
-            current_price: Live market price — required for accurate conversion on USD_JPY, USD_CHF
+            current_price: Live market price — required for accurate conversion on USD_JPY, USD_CAD
 
         Returns:
             Pip value in USD

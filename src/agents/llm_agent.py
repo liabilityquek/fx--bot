@@ -339,7 +339,7 @@ def _build_analyst_message(
             if label == 'USD_STRONG':
                 caution = ' — caution on EUR/GBP/AUD longs'
             elif label == 'USD_WEAK':
-                caution = ' — caution on USD/JPY/CHF longs'
+                caution = ' — caution on USD/JPY/CAD longs'
             macro_lines.append(
                 f"  USD sentiment: {label} ({score:+.2f}){caution}"
             )

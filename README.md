@@ -153,7 +153,7 @@ Copy `.env.template` to `.env` and fill in all values before deployment.
 | `CB_RATE_EUR` | `2.40` | ECB Deposit Facility Rate |
 | `CB_RATE_GBP` | `4.50` | BOE Bank Rate |
 | `CB_RATE_JPY` | `0.50` | BOJ Policy Rate |
-| `CB_RATE_CHF` | `0.25` | SNB Policy Rate |
+| `CB_RATE_CAD` | `3.75` | BOC Rate |
 | `CB_RATE_AUD` | `4.10` | RBA Cash Rate |
 
 **Optional overrides (defaults shown):**
@@ -229,7 +229,7 @@ To resume: remove the file or send `/resume` via Telegram.
 
 ## Trading Pairs
 
-EUR/USD, GBP/USD, USD/JPY, USD/CHF, AUD/USD — H1 timeframe only.
+EUR/USD, GBP/USD, USD/JPY, USD/CAD, AUD/USD — H1 timeframe only.
 
 ---
 

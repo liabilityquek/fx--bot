@@ -147,7 +147,7 @@ class ExposureTracker:
                     )
                 value_usd = abs_units * (current_price if current_price else 1.0)
             elif base_currency == 'USD':
-                # USD_JPY, USD_CHF: units are in USD — 1 unit = 1 USD, no conversion needed
+                # USD_JPY, USD_CAD: units are in USD — 1 unit = 1 USD, no conversion needed
                 value_usd = abs_units
             else:
                 # Cross pairs not currently traded — rough fallback

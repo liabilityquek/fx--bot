@@ -296,12 +296,12 @@ class RiskValidator:
         if quote == 'USD':
             return pv  # EUR_USD, GBP_USD, AUD_USD — already in USD
         if entry_price and entry_price > 0:
-            return pv / entry_price  # live rate — accurate for USD_JPY, USD_CHF
+            return pv / entry_price  # live rate — accurate for USD_JPY, USD_CAD
         # fallback approximations when no live price available
         if pair == 'USD_JPY':
             return pv / 150.0
-        if pair == 'USD_CHF':
-            return pv / 0.9
+        if pair == 'USD_CAD':
+            return pv / 1.36
         return pv
 
     def validate_multiple_trades(
