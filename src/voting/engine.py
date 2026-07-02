@@ -27,7 +27,8 @@ def _count_indicator_confluences(
     Count indicator signals aligned with the trade direction.
     Returns (count, [list of confluence names]).
     Max 6 directional confluences: RSI, MACD, EMA trend, Fisher, Bollinger, Market Structure.
-    ADX is a pre-gate (trend strength only, not direction) — checked in _is_adx_trending().
+    A 7th (+DI/-DI cross) is added when settings.DI_CONFLUENCE_ENABLED is on.
+    ADX magnitude is a pre-gate (trend strength only, not direction) — checked in _is_adx_trending().
     """
     aligned = []
 
@@ -79,6 +80,15 @@ def _count_indicator_confluences(
             aligned.append('Market Structure')
         elif not is_long and ms == 'bearish_structure':
             aligned.append('Market Structure')
+
+    if settings.DI_CONFLUENCE_ENABLED:
+        plus_di = indicators.get('plus_di')
+        minus_di = indicators.get('minus_di')
+        if plus_di is not None and minus_di is not None:
+            if is_long and plus_di > minus_di:
+                aligned.append('DI')
+            elif not is_long and minus_di > plus_di:
+                aligned.append('DI')
 
     return len(aligned), aligned
 
@@ -144,8 +154,9 @@ class DecisionEngine:
             signal = Signal.SELL
             count, types = short_conf, short_types
 
-        # 4. Confidence is informational only (max 6 confluences)
-        confidence = round(count / 6.0, 4)
+        # 4. Confidence is informational only (max 6, or 7 with DI confluence on)
+        max_conf = 7.0 if settings.DI_CONFLUENCE_ENABLED else 6.0
+        confidence = round(count / max_conf, 4)
         reasoning = f"{signal.value} {long_conf}/{short_conf} [{', '.join(types)}]"
 
         result = DecisionResult(

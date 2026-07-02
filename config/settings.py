@@ -86,6 +86,8 @@ class Settings:
 
     # Trade quality filters (Phase 1)
     MIN_CONFLUENCES: int = int(os.getenv('MIN_CONFLUENCES', '3'))
+    # Optional 7th confluence: +DI/-DI directional cross (long when +DI>-DI). Off by default.
+    DI_CONFLUENCE_ENABLED: bool = os.getenv('DI_CONFLUENCE_ENABLED', 'false').lower() == 'true'
     # TP is constructed as SL distance x DEFAULT_TAKE_PROFIT_RATIO, so the RR gate
     # default must not exceed that ratio or every signal is rejected.
     MIN_RR_RATIO: float = float(os.getenv('MIN_RR_RATIO', '2.0'))

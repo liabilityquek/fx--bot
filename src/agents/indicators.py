@@ -135,10 +135,14 @@ def ema(df: pd.DataFrame, period: int) -> Optional[float]:
 # ADX — Wilder smoothing on TR/+DM/-DM
 # ---------------------------------------------------------------------------
 
-def adx(df: pd.DataFrame, period: int = 14) -> Optional[float]:
-    """ADX using Wilder's smoothing."""
+def adx_components(df: pd.DataFrame, period: int = 14):
+    """ADX plus the +DI/-DI directional lines (Wilder's smoothing).
+
+    Returns (adx, plus_di, minus_di) as floats, or (None, None, None) if
+    insufficient data.
+    """
     if len(df) < period * 2 + 5:
-        return None
+        return None, None, None
 
     high = df['high']
     low = df['low']
@@ -170,7 +174,19 @@ def adx(df: pd.DataFrame, period: int = 14) -> Optional[float]:
     dx = (100 * (plus_di - minus_di).abs() / (plus_di + minus_di).replace(0, np.nan)).fillna(0)
     adx_val = dx.ewm(com=period - 1, adjust=False).mean().iloc[-1]
 
-    return float(adx_val) if pd.notna(adx_val) else None
+    if not pd.notna(adx_val):
+        return None, None, None
+    pdi, mdi = plus_di.iloc[-1], minus_di.iloc[-1]
+    return (
+        float(adx_val),
+        float(pdi) if pd.notna(pdi) else None,
+        float(mdi) if pd.notna(mdi) else None,
+    )
+
+
+def adx(df: pd.DataFrame, period: int = 14) -> Optional[float]:
+    """ADX using Wilder's smoothing."""
+    return adx_components(df, period)[0]
 
 
 # ---------------------------------------------------------------------------

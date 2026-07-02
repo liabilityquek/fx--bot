@@ -65,6 +65,19 @@ def test_counter_mirror_is_opposite():
     assert long_c == 6 and short_c == 0
 
 
+def test_di_confluence_only_counts_when_enabled():
+    from unittest.mock import patch
+    bull_di = {**_BULLISH, 'plus_di': 30.0, 'minus_di': 10.0}
+    # Off by default → DI ignored, still 6.
+    with patch.object(settings, 'DI_CONFLUENCE_ENABLED', False):
+        assert _count_indicator_confluences(bull_di, True, PRICE)[0] == 6
+    # Enabled → +DI>-DI adds a 7th on the long side, 0 on the short side.
+    with patch.object(settings, 'DI_CONFLUENCE_ENABLED', True):
+        long_c, long_t = _count_indicator_confluences(bull_di, True, PRICE)
+        short_c, _ = _count_indicator_confluences(bull_di, False, PRICE)
+        assert long_c == 7 and 'DI' in long_t and short_c == 0
+
+
 if __name__ == "__main__":
     test_bullish_indicators_produce_buy()
     test_bearish_indicators_produce_sell()

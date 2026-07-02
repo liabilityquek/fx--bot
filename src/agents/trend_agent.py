@@ -3,7 +3,7 @@
 from typing import Dict, List, Optional
 
 from .base import AgentVote, BaseAgent, Signal
-from .indicators import adx, atr, ema, market_structure, to_dataframe
+from .indicators import adx, adx_components, atr, ema, market_structure, to_dataframe
 
 
 class TrendAgent(BaseAgent):
@@ -20,7 +20,7 @@ class TrendAgent(BaseAgent):
 
         ema20 = ema(df, 20)
         ema50 = ema(df, 50)
-        adx_val = adx(df, 14)
+        adx_val, plus_di, minus_di = adx_components(df, 14)
 
         if ema20 is not None:
             result['ema20'] = ema20
@@ -28,6 +28,9 @@ class TrendAgent(BaseAgent):
             result['ema50'] = ema50
         if adx_val is not None:
             result['adx'] = round(adx_val, 4)
+        if plus_di is not None and minus_di is not None:
+            result['plus_di'] = round(plus_di, 4)
+            result['minus_di'] = round(minus_di, 4)
 
         if ema20 is not None and ema50 is not None:
             if ema20 > ema50:
