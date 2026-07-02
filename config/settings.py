@@ -86,6 +86,8 @@ class Settings:
 
     # Trade quality filters (Phase 1)
     MIN_CONFLUENCES: int = int(os.getenv('MIN_CONFLUENCES', '3'))
+    # ADX strength pre-gate: reject entries when ADX(14) is below this (ranging market).
+    ADX_MIN_TREND: float = float(os.getenv('ADX_MIN_TREND', '20.0'))
     # Optional 7th confluence: +DI/-DI directional cross (long when +DI>-DI). Off by default.
     DI_CONFLUENCE_ENABLED: bool = os.getenv('DI_CONFLUENCE_ENABLED', 'false').lower() == 'true'
     # TP is constructed as SL distance x DEFAULT_TAKE_PROFIT_RATIO, so the RR gate

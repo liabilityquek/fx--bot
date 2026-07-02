@@ -496,9 +496,9 @@ class TradingEngine:
         is_long = result.final_signal == Signal.BUY
 
         # Phase 1.0: ADX trending pre-gate — reject trades in ranging/choppy markets
-        if not _is_adx_trending(result.indicators):
+        if not _is_adx_trending(result.indicators, settings.ADX_MIN_TREND):
             self.logger.info(
-                f"{pair}: REJECTED — ADX below 20, market is ranging (ADX={result.indicators.get('adx')})"
+                f"{pair}: REJECTED — ADX below {settings.ADX_MIN_TREND}, market is ranging (ADX={result.indicators.get('adx')})"
             )
             return
 
@@ -1045,7 +1045,7 @@ def _htf_trend_aligned(h4_candles: Optional[List[Dict]], is_long: bool) -> bool:
     return ema20 > ema50 if is_long else ema20 < ema50
 
 
-def _is_adx_trending(indicators: dict, min_adx: float = 20.0) -> bool:
+def _is_adx_trending(indicators: dict, min_adx: float = settings.ADX_MIN_TREND) -> bool:
     """Return True if ADX confirms a trending market (strength gate, direction-agnostic)."""
     adx_val = indicators.get('adx')
     return adx_val is not None and adx_val >= min_adx

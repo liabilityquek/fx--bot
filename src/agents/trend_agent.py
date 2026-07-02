@@ -84,16 +84,6 @@ class TrendAgent(BaseAgent):
         # Base confidence: recent cross vs established gap
         established_gap = (atr_val is not None) and (gap > 0.5 * atr_val)
         confidence = 0.70 if established_gap else 0.65
-
-        # ADX modifier
-        if adx_val is not None:
-            if adx_val > 40:
-                confidence += 0.10
-            elif adx_val >= 25:
-                confidence += 0.05
-            elif adx_val < 20:
-                confidence -= 0.15
-
         confidence = max(0.50, min(1.0, confidence))
 
         reasoning = f"EMA20={ema20:.5f} EMA50={ema50:.5f}"
