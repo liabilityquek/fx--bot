@@ -25,7 +25,6 @@ from src.risk.holiday_guard import HolidayGuard
 from src.voting.engine import DecisionEngine
 from src.execution.engine import TradingEngine
 from src.news import EventMonitor, EventImpact
-from src.agents.news_risk_agent import NewsRiskAgent
 from src.news.news_watcher import NewsWatcher
 
 
@@ -91,10 +90,8 @@ def run_test(broker: OandaBroker, decision_engine: DecisionEngine, logger) -> bo
             print(f"\n{pair} DecisionResult:")
             print(f"  Final signal    : {result.final_signal.value}")
             print(f"  Confidence      : {result.confidence:.4f}")
-            print(f"  LLM reasoning   : {result.llm_reasoning}")
-            print(f"  LLM available   : {result.llm_available}")
-            print(f"  Reviewer verdict: {result.reviewer_verdict}")
-            print(f"  Reviewer reason : {result.reviewer_reason}")
+            print(f"  Confluences     : {result.confluence_count} [{', '.join(result.confluence_types)}]")
+            print(f"  Reasoning       : {result.reasoning}")
 
         except Exception as exc:
             logger.error(f"{pair}: test failed: {exc}")
@@ -133,7 +130,6 @@ def main():
         logger.error("Cannot connect to broker — aborting")
         sys.exit(1)
 
-    news_risk_agent = NewsRiskAgent(logger)
     engine = TradingEngine(
         broker=broker,
         decision_engine=decision_engine,
@@ -149,7 +145,6 @@ def main():
         event_monitor=event_monitor,
         broker=broker,
         alert_manager=alert_manager,
-        news_risk_agent=news_risk_agent,
         get_trades_snapshot_fn=engine.get_known_trades_snapshot,
         on_trade_closed_fn=engine.remove_known_trade,
         logger=logger,
@@ -208,9 +203,7 @@ def main():
         get_status_fn=engine.get_status,
         get_calendar_fn=_get_calendar_text,
         get_calhistory_fn=_get_calhistory_text,
-        get_credits_fn=decision_engine.get_llm_provider_status,
         get_analyst_fn=decision_engine.get_analyst_summary,
-        get_reviewer_fn=decision_engine.get_reviewer_summary,
     )
 
     try:

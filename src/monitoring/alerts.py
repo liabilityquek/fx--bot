@@ -46,9 +46,7 @@ class AlertManager:
         self._get_status_fn = None
         self._get_calendar_fn = None
         self._get_calhistory_fn = None
-        self._get_credits_fn = None
         self._get_analyst_fn = None
-        self._get_reviewer_fn = None
         self._poll_interval = 10
         self._poll_failures = 0
         self._last_update_id = 0
@@ -186,26 +184,6 @@ class AlertManager:
         message = f"⚠️ *Error*\n\n`{error_message}`"
         self.send_alert(message, 'ERROR')
 
-    def alert_llm_credits_exhausted(self):
-        """Send critical alert when both Groq and Anthropic credits are exhausted."""
-        message = (
-            "🔴 *LLM Credits Exhausted*\n\n"
-            "Both Groq and Anthropic API credits are depleted.\n"
-            "The LLM analyst is now offline — trading halted this cycle.\n\n"
-            "Top up credits to restore full functionality."
-        )
-        self.send_alert(message, 'CRITICAL')
-
-    def alert_reviewer_unavailable(self, pair: str, reason: str):
-        """Send alert when ReviewerAgent is unavailable — trade blocked this cycle."""
-        message = (
-            f"⚠️ *Reviewer Unavailable*\n\n"
-            f"*Pair:* `{pair}`\n"
-            f"*Reason:* {reason}\n"
-            f"Trade blocked — reviewer could not run this cycle."
-        )
-        self.send_alert(message, 'WARNING')
-    
     def alert_system_start(self):
         """Send system startup alert."""
         mode = "📝 PAPER" if settings.PAPER_TRADING_MODE else "💰 LIVE"
@@ -231,15 +209,7 @@ class AlertManager:
             f"{settings.NEWS_RESUME_AFTER_MINUTES}min after"
         )
         self.send_alert(message, 'WARNING')
-    
-    def alert_strategy_update(self, summary: str):
-        """Send alert when LLM strategist updates config."""
-        message = (
-            f"🧠 *Strategy Updated*\n\n"
-            f"{summary}"
-        )
-        self.send_alert(message, 'INFO')
-    
+
     def alert_daily_summary(
         self,
         trades_count: int,
@@ -276,9 +246,7 @@ class AlertManager:
         get_status_fn: Optional[Callable[[], str]] = None,
         get_calendar_fn: Optional[Callable[[], str]] = None,
         get_calhistory_fn: Optional[Callable[[], str]] = None,
-        get_credits_fn: Optional[Callable[[], str]] = None,
         get_analyst_fn: Optional[Callable[[], str]] = None,
-        get_reviewer_fn: Optional[Callable[[], str]] = None,
         poll_interval_seconds: int = 10
     ) -> None:
         """
@@ -289,7 +257,7 @@ class AlertManager:
             get_status_fn: Optional callable returning a status string for /status
             get_calendar_fn: Optional callable returning a formatted calendar string for /calendar
             get_calhistory_fn: Optional callable returning past events string for /calhistory
-            get_credits_fn: Optional callable returning LLM provider credit status for /credits
+            get_analyst_fn: Optional callable returning the decision summary for /analyst
             poll_interval_seconds: How often to poll (default: 10s)
         """
         if not self.enabled:
@@ -300,9 +268,7 @@ class AlertManager:
         self._get_status_fn = get_status_fn
         self._get_calendar_fn = get_calendar_fn
         self._get_calhistory_fn = get_calhistory_fn
-        self._get_credits_fn = get_credits_fn
         self._get_analyst_fn = get_analyst_fn
-        self._get_reviewer_fn = get_reviewer_fn
         self._poll_interval = poll_interval_seconds
         self._poll_failures = 0  # consecutive failure counter
         self._last_update_id: int = self._fetch_latest_update_id()
@@ -315,7 +281,7 @@ class AlertManager:
         thread.start()
         self.logger.info(
             f"📱 Telegram command poller started (interval: {poll_interval_seconds}s) "
-            "— commands: /stop, /resume, /status, /calendar, /calhistory, /logs, /credits, /analyst, /reviewer"
+            "— commands: /stop, /resume, /status, /calendar, /calhistory, /logs, /analyst"
         )
 
     def _fetch_latest_update_id(self) -> int:
@@ -405,12 +371,8 @@ class AlertManager:
                     self._handle_calhistory()
                 elif text == "/logs":
                     self._handle_logs()
-                elif text == "/credits":
-                    self._handle_credits()
                 elif text == "/analyst":
                     self._handle_analyst()
-                elif text == "/reviewer":
-                    self._handle_reviewer()
                 elif text == "/help":
                     self._send_telegram(
                         "🤖 *FX Bot Commands*\n\n"
@@ -420,9 +382,7 @@ class AlertManager:
                         "/calendar — upcoming economic events today\n"
                         "/calhistory — past economic events today\n"
                         "/logs — today's bot log entries\n"
-                        "/credits — LLM provider credit status\n"
-                        "/analyst — last analyst decision per pair\n"
-                        "/reviewer — last reviewer verdict per pair\n"
+                        "/analyst — last decision per pair\n"
                         "/help — show this message"
                     )
             except Exception as exc:
@@ -525,38 +485,14 @@ class AlertManager:
         except Exception as exc:
             self._send_telegram(f"📋 *Logs*\n\nFailed to read log file: {exc}")
 
-    def _handle_credits(self) -> None:
-        """Reply with LLM provider credit/availability status."""
-        fn = getattr(self, '_get_credits_fn', None)
-        if not fn:
-            self._send_telegram("💳 *LLM Credits*\n\nCredit status not available.")
-            return
-        try:
-            status_text = fn()
-            self._send_telegram(f"💳 *LLM Provider Status*\n\n`{status_text}`")
-        except Exception as exc:
-            self._send_telegram(f"💳 *LLM Credits*\n\nFailed to fetch status: {exc}")
-
     def _handle_analyst(self) -> None:
-        """Reply with the last analyst decision for each pair."""
+        """Reply with the last decision for each pair."""
         fn = getattr(self, '_get_analyst_fn', None)
         if not fn:
-            self._send_telegram("Analyst History\n\nAnalyst history not available.", parse_mode="")
+            self._send_telegram("Decision Summary\n\nDecision history not available.", parse_mode="")
             return
         try:
             msg = fn()
             self._send_telegram(msg, parse_mode="")
         except Exception as exc:
-            self._send_telegram(f"Analyst History\n\nFailed to fetch analyst history: {exc}", parse_mode="")
-
-    def _handle_reviewer(self) -> None:
-        """Reply with the last reviewer verdict for each pair."""
-        fn = getattr(self, '_get_reviewer_fn', None)
-        if not fn:
-            self._send_telegram("Reviewer History\n\nReviewer history not available.", parse_mode="")
-            return
-        try:
-            msg = fn()
-            self._send_telegram(msg, parse_mode="")
-        except Exception as exc:
-            self._send_telegram(f"Reviewer History\n\nFailed to fetch reviewer history: {exc}", parse_mode="")
+            self._send_telegram(f"Decision Summary\n\nFailed to fetch decision history: {exc}", parse_mode="")

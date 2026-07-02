@@ -4,9 +4,8 @@ Rule 3 (Agent 3): deterministic conviction tiers based on R-multiple.
   < 1R profit  → close immediately
   >= 1R profit → partial close 50% + move SL to break-even
 
-The LLM NewsRiskAgent is no longer on this critical path. Deterministic rules
-execute without LLM latency or discretion. Runs on its own thread, polling
-every NEWS_RISK_POLL_INTERVAL_SECONDS seconds.
+Deterministic rules only — no LLM on the news path. Runs on its own thread,
+polling every NEWS_RISK_POLL_INTERVAL_SECONDS seconds.
 """
 
 import logging
@@ -26,7 +25,6 @@ class NewsWatcher:
         event_monitor,
         broker,
         alert_manager,
-        news_risk_agent,
         get_trades_snapshot_fn: Callable,
         on_trade_closed_fn: Callable,
         logger: Optional[logging.Logger] = None,
@@ -34,7 +32,6 @@ class NewsWatcher:
         self.event_monitor = event_monitor
         self.broker = broker
         self.alert_manager = alert_manager
-        self.news_risk_agent = news_risk_agent  # retained, no longer on critical path
         self.get_trades_snapshot_fn = get_trades_snapshot_fn
         self.on_trade_closed_fn = on_trade_closed_fn
         self.logger = logger or logging.getLogger("NewsWatcher")
@@ -107,10 +104,10 @@ class NewsWatcher:
                     f"in {event.minutes_until:.0f}min"
                 )
 
-                if r_multiple < 1.0:
+                if r_multiple < settings.NEWS_RISK_MIN_R:
                     self._close_and_alert(
                         trade, event,
-                        reason=f"<1R profit (R={r_multiple:.2f}) before high-impact news"
+                        reason=f"<{settings.NEWS_RISK_MIN_R}R profit (R={r_multiple:.2f}) before high-impact news"
                     )
                 else:
                     self._partial_close_and_protect(trade, event, r_multiple)

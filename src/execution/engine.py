@@ -32,7 +32,7 @@ from src.risk import (
 )
 from src.risk.emergency_controller import EmergencyRiskController, ShutdownReason
 from src.execution.trade_manager import TradeManager
-from src.voting.engine import DecisionResult, DecisionEngine
+from src.voting.engine import DecisionResult, DecisionEngine, _count_indicator_confluences
 from src.agents.base import Signal
 from src.news.suspension_manager import SuspensionManager
 from src.risk.conflict_checker import TradeConflictChecker
@@ -489,7 +489,7 @@ class TradingEngine:
         if result.final_signal == Signal.HOLD:
             self.logger.info(
                 f"{pair}: HOLD (confidence={result.confidence:.2f} | "
-                f"reviewer={result.reviewer_verdict})"
+                f"confluences={result.confluence_count})"
             )
             return
 
@@ -509,39 +509,17 @@ class TradingEngine:
             )
             return
 
-        # Phase 1.1: Confluence validation
-        confluence_count, confluence_types = _count_indicator_confluences(
-            result.indicators, is_long, price
-        )
-        result.confluence_count = confluence_count
-        result.confluence_types = confluence_types
+        # Phase 1.1: Confluence validation (count already set by decision engine)
         min_confluences = settings.MIN_CONFLUENCES
         self.logger.info(
-            f"{pair}: confluence check — {confluence_count}/{min_confluences} "
-            f"[{', '.join(confluence_types) if confluence_types else 'none'}] "
-            f"({'PASS' if confluence_count >= min_confluences else 'FAIL'})"
+            f"{pair}: confluence check — {result.confluence_count}/{min_confluences} "
+            f"[{', '.join(result.confluence_types) if result.confluence_types else 'none'}] "
+            f"({'PASS' if result.confluence_count >= min_confluences else 'FAIL'})"
         )
-        if confluence_count < min_confluences:
+        if result.confluence_count < min_confluences:
             self.logger.info(
                 f"{pair}: REJECTED — insufficient confluences "
-                f"({confluence_count} < {min_confluences} required)"
-            )
-            return
-
-        # Phase 1.3: Setup type quality filter
-        setup_quality = _get_setup_quality_score(result.setup_type)
-        if setup_quality == 0:
-            self.logger.info(
-                f"{pair}: REJECTED — low-quality setup type ({result.setup_type})"
-            )
-            return
-
-        # Require higher confidence for lower-quality setups
-        min_confidence_for_setup = _get_min_confidence_for_setup(result.setup_type)
-        if result.confidence < min_confidence_for_setup:
-            self.logger.info(
-                f"{pair}: REJECTED — confidence {result.confidence:.2f} below minimum "
-                f"{min_confidence_for_setup:.2f} for setup type {result.setup_type}"
+                f"({result.confluence_count} < {min_confluences} required)"
             )
             return
 
@@ -717,10 +695,7 @@ class TradingEngine:
                     trailing_stop=True,
                     trailing_distance=self.trade_manager.trailing_stop_distance_pips,
                     confidence=result.confidence,
-                    entry_reason=result.llm_reasoning,
-                    setup_type=result.setup_type,
-                    reviewer_verdict=result.reviewer_verdict,
-                    reviewer_reason=result.reviewer_reason,
+                    entry_reason=result.reasoning,
                 )
                 if atr_val and atr_val > 0:
                     self.trade_manager.update_trade_atr(placed_trade.trade_id, atr_val)
@@ -934,16 +909,12 @@ class TradingEngine:
         lines = [
             f"{prefix}TRADE OPENED -- {pair}",
             f"Direction: {result.final_signal.value}",
-            f"Setup: {result.setup_type}",
             f"Confluences: {result.confluence_count}/{min_conf_display} "
             f"[{', '.join(result.confluence_types)}]",
             f"Entry: {entry_price:.5f}",
             f"SL: {stop_loss:.5f} | TP: {take_profit:.5f}",
             f"Size: {units / 100_000:.2f} lots",
             f"Confidence: {result.confidence:.2f}",
-            "",
-            f"LLM: {result.final_signal.value} ({result.confidence:.2f}) | "
-            f"Reviewer: {result.reviewer_verdict} -- {result.reviewer_reason}",
         ]
         text = "\n".join(lines)
         self.alert_manager._send_telegram(text, parse_mode='')
@@ -952,7 +923,7 @@ class TradingEngine:
         self.logger.info(
             f"{result.pair}: {result.final_signal.value} "
             f"conf={result.confidence:.2f} | "
-            f"reviewer={result.reviewer_verdict} — {result.reviewer_reason}"
+            f"confluences={result.confluence_count} [{', '.join(result.confluence_types)}]"
         )
 
     # ------------------------------------------------------------------
@@ -1054,69 +1025,6 @@ def _m15_momentum_aligned(m15_candles: list, is_long: bool) -> bool:
         return bearish >= threshold
 
 
-def _count_indicator_confluences(
-    indicators: dict, is_long: bool, price: float
-) -> tuple:
-    """
-    Count indicator signals aligned with the trade direction.
-    Returns (count, [list of confluence names]).
-    Max 6 directional confluences: RSI, MACD, EMA trend, Fisher, Bollinger, Market Structure.
-    ADX is a pre-gate (trend strength only, not direction) — checked in _is_adx_trending().
-    """
-    aligned = []
-
-    rsi_val = indicators.get('rsi')
-    if rsi_val is not None:
-        if is_long and rsi_val > 50:
-            aligned.append('RSI')
-        elif not is_long and rsi_val < 50:
-            aligned.append('RSI')
-
-    macd_hist = indicators.get('macd_hist')
-    if macd_hist is not None:
-        if is_long and macd_hist > 0:
-            aligned.append('MACD')
-        elif not is_long and macd_hist < 0:
-            aligned.append('MACD')
-
-    trend = indicators.get('trend')
-    if trend is not None:
-        if is_long and trend == 'bullish':
-            aligned.append('EMA trend')
-        elif not is_long and trend == 'bearish':
-            aligned.append('EMA trend')
-
-    fisher_val = indicators.get('fisher')
-    if fisher_val is not None:
-        if is_long and fisher_val > 0:
-            aligned.append('Fisher')
-        elif not is_long and fisher_val < 0:
-            aligned.append('Fisher')
-
-    bb_upper = indicators.get('bb_upper')
-    bb_lower = indicators.get('bb_lower')
-    bb_mid   = indicators.get('bb_mid')
-    if bb_upper and bb_lower and bb_mid and price > 0:
-        band_range = bb_upper - bb_lower
-        if band_range > 0:
-            # Only count Bollinger as confluence when price is meaningfully above/below midline
-            # (at least 15% into the upper or lower half of the band)
-            threshold = band_range * 0.15
-            if is_long and price > bb_mid + threshold:
-                aligned.append('Bollinger')
-            elif not is_long and price < bb_mid - threshold:
-                aligned.append('Bollinger')
-
-    ms = indicators.get('market_structure')
-    if ms is not None:
-        if is_long and ms == 'bullish_structure':
-            aligned.append('Market Structure')
-        elif not is_long and ms == 'bearish_structure':
-            aligned.append('Market Structure')
-
-    return len(aligned), aligned
-
-
 def _htf_trend_aligned(h4_candles: Optional[List[Dict]], is_long: bool) -> bool:
     """
     True when the H4 EMA20/50 trend agrees with the trade direction.
@@ -1171,48 +1079,3 @@ def _estimate_pnl(trade, close_price: float) -> float:
     if close_price > 0:
         return round((diff * trade.units) / close_price, 2)
     return 0.0
-
-
-def _get_setup_quality_score(setup_type: str) -> int:
-    """
-    Return quality score for setup type (0-5).
-
-    Quality tiers:
-    - 5: BREAKOUT (highest quality)
-    - 4: PULLBACK
-    - 3: REVERSAL
-    - 0: RANGE, NONE (rejected)
-
-    Returns 0 for setups that should be rejected.
-    """
-    quality_map = {
-        'BREAKOUT': 5,
-        'PULLBACK': 4,
-        'REVERSAL': 3,
-        'RANGE': 0,
-        'NONE': 0,
-    }
-    return quality_map.get(setup_type.upper(), 0)
-
-
-def _get_min_confidence_for_setup(setup_type: str) -> float:
-    """
-    Return minimum confidence threshold for setup type.
-
-    Higher-quality setups can proceed with lower confidence.
-    Lower-quality setups require higher confidence.
-
-    Returns:
-    - BREAKOUT: 0.60 (standard threshold)
-    - PULLBACK: 0.65
-    - REVERSAL: 0.70
-    - RANGE, NONE: 1.00 (effectively rejected)
-    """
-    confidence_map = {
-        'BREAKOUT': 0.60,
-        'PULLBACK': 0.65,
-        'REVERSAL': 0.70,
-        'RANGE': 1.00,
-        'NONE': 1.00,
-    }
-    return confidence_map.get(setup_type.upper(), 0.70)

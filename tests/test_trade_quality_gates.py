@@ -60,11 +60,7 @@ def _hold_result(pair="EUR_USD"):
         pair=pair,
         final_signal=Signal.HOLD,
         confidence=0.5,
-        llm_reasoning="test",
-        llm_available=True,
-        reviewer_verdict='SKIPPED',
-        reviewer_reason='test',
-        reviewer_available=True,
+        reasoning="test",
     )
 
 

@@ -36,24 +36,8 @@ class Settings:
         return 'https://stream-fxpractice.oanda.com'
 
     # ==========================================
-    # GROQ / LLM AGENT
+    # DECISION ENGINE (deterministic technical confluence)
     # ==========================================
-    GROQ_API_KEY: str = os.getenv('GROQ_API_KEY', '')
-    LLM_MODEL: str = os.getenv('LLM_MODEL', 'llama-3.3-70b-versatile')
-    LLM_AGENT_WEIGHT: float = float(os.getenv('LLM_AGENT_WEIGHT', '1.5'))
-
-    # Anthropic fallback (used when Groq credits are exhausted)
-    ANTHROPIC_API_KEY: str = os.getenv('ANTHROPIC_API_KEY', '')
-    ANTHROPIC_LLM_MODEL: str = os.getenv('ANTHROPIC_LLM_MODEL', 'claude-haiku-4-5-20251001')
-
-    # Reviewer model — Groq small model (fast, sufficient for review task)
-    # Anthropic fallback uses ANTHROPIC_LLM_MODEL above
-    REVIEWER_LLM_MODEL: str = os.getenv('REVIEWER_LLM_MODEL', 'llama-3.1-8b-instant')
-
-    # ==========================================
-    # VOTING ENGINE
-    # ==========================================
-    CONSENSUS_THRESHOLD: float = float(os.getenv('CONSENSUS_THRESHOLD', '0.60'))
     H1_CANDLE_COUNT: int = int(os.getenv('H1_CANDLE_COUNT', '100'))
     M15_CANDLE_COUNT: int = int(os.getenv('M15_CANDLE_COUNT', '100'))
     H4_CANDLE_COUNT: int = int(os.getenv('H4_CANDLE_COUNT', '60'))
@@ -174,8 +158,8 @@ class Settings:
     NEWS_SUSPEND_BEFORE_MINUTES: int = int(os.getenv('NEWS_SUSPEND_BEFORE_MINUTES', '30'))
     NEWS_RESUME_AFTER_MINUTES: int = int(os.getenv('NEWS_RESUME_AFTER_MINUTES', '30'))
     EVENT_CACHE_TTL_HOURS: int = int(os.getenv('EVENT_CACHE_TTL_HOURS', '1'))
-    # Rule 3 — news risk agent (pre-event LLM close decision)
-    NEWS_RISK_CLOSE_THRESHOLD: float = float(os.getenv('NEWS_RISK_CLOSE_THRESHOLD', '0.65'))
+    # Rule 3 — deterministic pre-event close: profit below this R-multiple → close
+    NEWS_RISK_MIN_R: float = float(os.getenv('NEWS_RISK_MIN_R', '1.0'))
     NEWS_RISK_MINUTES_BEFORE: int = int(os.getenv('NEWS_RISK_MINUTES_BEFORE', '20'))
     NEWS_RISK_POLL_INTERVAL_SECONDS: int = int(os.getenv('NEWS_RISK_POLL_INTERVAL_SECONDS', '120'))
     HIGH_IMPACT_EVENTS: List[str] = os.getenv(
@@ -211,9 +195,6 @@ class Settings:
         if not cls.OANDA_ACCOUNT_ID:
             errors.append("OANDA_ACCOUNT_ID is required")
 
-        if not cls.GROQ_API_KEY:
-            errors.append("GROQ_API_KEY is required (LLM agent will fall back to HOLD without it)")
-
         # Validate each trading pair name
         for pair in cls.TRADING_PAIRS:
             if not pair_pattern.match(pair.strip()):
@@ -226,9 +207,7 @@ class Settings:
             print("Configuration Errors:")
             for error in errors:
                 print(f"  - {error}")
-            # ANTHROPIC_API_KEY missing is non-fatal — LLM agent has a fallback
-            fatal = [e for e in errors if 'GROQ_API_KEY' not in e]
-            return len(fatal) == 0
+            return False
 
         return True
 
@@ -241,8 +220,7 @@ class Settings:
         print(f"  Environment: {cls.OANDA_ENVIRONMENT}")
         print(f"  Paper Trading: {cls.PAPER_TRADING_MODE}")
         print(f"  Timeframe: {cls.TIMEFRAME}")
-        print(f"  Consensus Threshold: {cls.CONSENSUS_THRESHOLD}")
-        print(f"  LLM Model: {cls.LLM_MODEL}")
+        print(f"  Min Confluences: {cls.MIN_CONFLUENCES}")
         print(f"  Max Risk per Trade: {cls.MAX_RISK_PER_TRADE*100}%")
         print(f"  Max Total Exposure: {cls.MAX_TOTAL_EXPOSURE*100}%")
         print(f"  Alerts Enabled: {cls.ALERT_ENABLED}")

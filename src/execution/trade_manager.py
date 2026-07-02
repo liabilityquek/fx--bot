@@ -79,9 +79,6 @@ class ManagedTrade:
     atr_value: Optional[float] = None  # Last known ATR for dynamic trailing stop
     confidence: float = 0.0
     entry_reason: str = ""
-    setup_type: str = "NONE"
-    reviewer_verdict: str = ""
-    reviewer_reason: str = ""
     @property
     def age_hours(self) -> float:
         """Get trade age in market hours, excluding FX weekends."""
@@ -148,9 +145,6 @@ class TradeManager:
         trailing_distance: float = 0.0,
         confidence: float = 0.0,
         entry_reason: str = "",
-        setup_type: str = "NONE",
-        reviewer_verdict: str = "",
-        reviewer_reason: str = "",
     ) -> ManagedTrade:
         """
         Register a new trade for management.
@@ -176,9 +170,6 @@ class TradeManager:
             lowest_price=trade.entry_price,
             confidence=confidence,
             entry_reason=entry_reason[:120] if entry_reason else "",
-            setup_type=setup_type,
-            reviewer_verdict=reviewer_verdict,
-            reviewer_reason=reviewer_reason,
         )
 
         with self._lock:
