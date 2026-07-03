@@ -1,17 +1,19 @@
-"""DecisionEngine — deterministic technical-confluence decision pipeline.
+"""DecisionEngine — deterministic DMI/ADX direction pipeline.
 
-Pipeline per cycle:
-  1. TechAgent/TrendAgent/MomentumAgent.get_indicators() → merged indicators dict
-  2. Count directional confluences for long and short sides
-  3. Pick the side with more aligned indicators; must hit MIN_CONFLUENCES, else HOLD
-  4. confidence = confluence_count / 6.0  (informational only, NOT a gate)
+Direction is owned by the classic Wilder DMI/ADX system:
+  - ADX(14) >= ADX_MIN_TREND gives permission to trade (trend strong enough).
+  - +DI vs -DI gives the side: +DI > -DI -> BUY, -DI > +DI -> SELL.
+  - Otherwise HOLD (ranging market or no directional lean).
 
-No LLM, no reviewer, no consensus threshold. SL/TP/sizing stay pure math downstream.
+There is no confluence vote. The remaining indicators act as confirmation hard
+gates downstream in the execution engine (area-of-value EMA20 pullback + RSI-turning
+trigger) — they decide whether the DMI-chosen direction is actually executed.
+SL/TP/sizing stay pure math downstream. No LLM, no reviewer.
 """
 
 import logging
 from dataclasses import dataclass, field
-from typing import Dict, List, Optional
+from typing import Dict, List, Optional, Tuple
 
 from src.agents.base import Signal
 from src.agents.momentum_agent import MomentumAgent
@@ -20,92 +22,42 @@ from src.agents.trend_agent import TrendAgent
 from config.settings import settings
 
 
-def _count_indicator_confluences(
-    indicators: dict, is_long: bool, price: float
-) -> tuple:
+def _dmi_direction(indicators: dict) -> Tuple[Signal, List[str]]:
+    """Classic Wilder DMI/ADX direction.
+
+    Returns (signal, reasons). HOLD when ADX/DI are unavailable, ADX is below
+    ADX_MIN_TREND (ranging), or +DI == -DI (no directional lean).
     """
-    Count indicator signals aligned with the trade direction.
-    Returns (count, [list of confluence names]).
-    Max 6 directional confluences: RSI, MACD, EMA trend, Fisher, Bollinger, Market Structure.
-    A 7th (+DI/-DI cross) is added when settings.DI_CONFLUENCE_ENABLED is on.
-    ADX magnitude is a pre-gate (trend strength only, not direction) — checked in _is_adx_trending().
-    """
-    aligned = []
+    adx_v = indicators.get('adx')
+    plus_di = indicators.get('plus_di')
+    minus_di = indicators.get('minus_di')
 
-    rsi_val = indicators.get('rsi')
-    if rsi_val is not None:
-        if is_long and rsi_val > 50:
-            aligned.append('RSI')
-        elif not is_long and rsi_val < 50:
-            aligned.append('RSI')
+    if adx_v is None or plus_di is None or minus_di is None:
+        return Signal.HOLD, ["DMI/ADX unavailable"]
+    if adx_v < settings.ADX_MIN_TREND:
+        return Signal.HOLD, [f"ADX {adx_v:.0f} < {settings.ADX_MIN_TREND:.0f} (ranging)"]
+    if plus_di == minus_di:
+        return Signal.HOLD, [f"+DI == -DI {plus_di:.0f} (no lean)"]
 
-    macd_hist = indicators.get('macd_hist')
-    if macd_hist is not None:
-        if is_long and macd_hist > 0:
-            aligned.append('MACD')
-        elif not is_long and macd_hist < 0:
-            aligned.append('MACD')
-
-    trend = indicators.get('trend')
-    if trend is not None:
-        if is_long and trend == 'bullish':
-            aligned.append('EMA trend')
-        elif not is_long and trend == 'bearish':
-            aligned.append('EMA trend')
-
-    fisher_val = indicators.get('fisher')
-    if fisher_val is not None:
-        if is_long and fisher_val > 0:
-            aligned.append('Fisher')
-        elif not is_long and fisher_val < 0:
-            aligned.append('Fisher')
-
-    bb_upper = indicators.get('bb_upper')
-    bb_lower = indicators.get('bb_lower')
-    bb_mid   = indicators.get('bb_mid')
-    if bb_upper and bb_lower and bb_mid and price > 0:
-        band_range = bb_upper - bb_lower
-        if band_range > 0:
-            # Only count Bollinger as confluence when price is meaningfully above/below midline
-            # (at least 15% into the upper or lower half of the band)
-            threshold = band_range * 0.15
-            if is_long and price > bb_mid + threshold:
-                aligned.append('Bollinger')
-            elif not is_long and price < bb_mid - threshold:
-                aligned.append('Bollinger')
-
-    ms = indicators.get('market_structure')
-    if ms is not None:
-        if is_long and ms == 'bullish_structure':
-            aligned.append('Market Structure')
-        elif not is_long and ms == 'bearish_structure':
-            aligned.append('Market Structure')
-
-    if settings.DI_CONFLUENCE_ENABLED:
-        plus_di = indicators.get('plus_di')
-        minus_di = indicators.get('minus_di')
-        if plus_di is not None and minus_di is not None:
-            if is_long and plus_di > minus_di:
-                aligned.append('DI')
-            elif not is_long and minus_di > plus_di:
-                aligned.append('DI')
-
-    return len(aligned), aligned
+    up = plus_di > minus_di
+    reasons = [
+        f"+DI {plus_di:.0f} {'>' if up else '<'} -DI {minus_di:.0f}",
+        f"ADX {adx_v:.0f} >= {settings.ADX_MIN_TREND:.0f}",
+    ]
+    return (Signal.BUY if up else Signal.SELL), reasons
 
 
 @dataclass
 class DecisionResult:
     pair: str
     final_signal: Signal
-    confidence: float           # confluence_count / 6.0 — informational, not gated
+    confidence: float           # ADX-scaled — informational, not gated
     reasoning: str
     indicators: dict = field(default_factory=dict)
-    confluence_count: int = 0
-    confluence_types: list = field(default_factory=list)
 
 
 class DecisionEngine:
-    """Orchestrates the deterministic technical-confluence decision pipeline."""
+    """Orchestrates the deterministic DMI/ADX direction pipeline."""
 
     def __init__(
         self,
@@ -127,37 +79,31 @@ class DecisionEngine:
     # ------------------------------------------------------------------
 
     def run_decision(self, pair: str, candles: List[Dict], price: float, pair_prices: Optional[dict] = None, htf_candles: Optional[dict] = None) -> DecisionResult:
-        """Run the deterministic pipeline and return a DecisionResult.
+        """Run the DMI/ADX pipeline and return a DecisionResult.
 
-        Direction is chosen by whichever side (long/short) has more aligned
-        indicator confluences. Ties or an insufficient count → HOLD.
+        Direction is the classic Wilder system; the confirmation gates
+        (area-of-value + RSI-turning) run downstream in the execution engine.
         """
-        # 1. Collect indicators from all three tech agents
+        # 1. Collect indicators — direction needs adx/plus_di/minus_di; the
+        #    downstream area-of-value gate needs ema20/atr; rsi is recorded only.
         indicators: dict = {}
         indicators.update(self._tech.get_indicators(pair, candles, price))
         indicators.update(self._trend.get_indicators(pair, candles, price))
         indicators.update(self._momentum.get_indicators(pair, candles, price))
 
-        # 2. Count directional confluences for both sides
-        long_conf, long_types   = _count_indicator_confluences(indicators, True, price)
-        short_conf, short_types = _count_indicator_confluences(indicators, False, price)
+        # 2. Direction from DMI/ADX
+        signal, reasons = _dmi_direction(indicators)
 
-        # 3. Pick direction
-        best = max(long_conf, short_conf)
-        if best < settings.MIN_CONFLUENCES or long_conf == short_conf:
-            signal = Signal.HOLD
-            count, types = best, (long_types if long_conf >= short_conf else short_types)
-        elif long_conf > short_conf:
-            signal = Signal.BUY
-            count, types = long_conf, long_types
+        # 3. Confidence — ADX-scaled, informational only (no gate reads it)
+        adx_v = indicators.get('adx')
+        if signal == Signal.HOLD or adx_v is None:
+            confidence = 0.0
         else:
-            signal = Signal.SELL
-            count, types = short_conf, short_types
+            confidence = round(
+                min(0.55 + max(0.0, adx_v - settings.ADX_MIN_TREND) * 0.01, 0.90), 4
+            )
 
-        # 4. Confidence is informational only (max 6, or 7 with DI confluence on)
-        max_conf = 7.0 if settings.DI_CONFLUENCE_ENABLED else 6.0
-        confidence = round(count / max_conf, 4)
-        reasoning = f"{signal.value} {long_conf}/{short_conf} [{', '.join(types)}]"
+        reasoning = f"{signal.value} | " + " | ".join(reasons)
 
         result = DecisionResult(
             pair=pair,
@@ -165,8 +111,6 @@ class DecisionEngine:
             confidence=confidence,
             reasoning=reasoning,
             indicators=indicators,
-            confluence_count=count,
-            confluence_types=types,
         )
         self._last_results[pair] = result
         return result
@@ -178,16 +122,10 @@ class DecisionEngine:
 
         lines = ['Decision Summary\n']
         for pair, result in self._last_results.items():
-            conf_str = (
-                f"{result.confluence_count}/{settings.MIN_CONFLUENCES} "
-                f"[{', '.join(result.confluence_types)}]"
-                if result.confluence_types else "not yet computed"
-            )
             lines.append(
                 f'{pair}\n'
                 f'  Signal:      {result.final_signal.value}\n'
                 f'  Confidence:  {result.confidence:.2f}\n'
-                f'  Confluences: {conf_str}\n'
                 f'  Reasoning:   {result.reasoning}'
             )
         return '\n\n'.join(lines)

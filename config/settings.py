@@ -36,10 +36,9 @@ class Settings:
         return 'https://stream-fxpractice.oanda.com'
 
     # ==========================================
-    # DECISION ENGINE (deterministic technical confluence)
+    # DECISION ENGINE (deterministic DMI/ADX direction)
     # ==========================================
     H1_CANDLE_COUNT: int = int(os.getenv('H1_CANDLE_COUNT', '100'))
-    M15_CANDLE_COUNT: int = int(os.getenv('M15_CANDLE_COUNT', '100'))
     H4_CANDLE_COUNT: int = int(os.getenv('H4_CANDLE_COUNT', '60'))
     D1_CANDLE_COUNT: int = int(os.getenv('D1_CANDLE_COUNT', '60'))
 
@@ -85,11 +84,15 @@ class Settings:
     DEFAULT_TAKE_PROFIT_RATIO: float = float(os.getenv('DEFAULT_TAKE_PROFIT_RATIO', '2.0'))
 
     # Trade quality filters (Phase 1)
-    MIN_CONFLUENCES: int = int(os.getenv('MIN_CONFLUENCES', '3'))
-    # ADX strength pre-gate: reject entries when ADX(14) is below this (ranging market).
+    # DMI/ADX owns direction: ADX(14) >= this gives permission to trade, +DI vs -DI
+    # gives the side. Below this the market is ranging and the pipeline returns HOLD.
     ADX_MIN_TREND: float = float(os.getenv('ADX_MIN_TREND', '20.0'))
-    # Optional 7th confluence: +DI/-DI directional cross (long when +DI>-DI). Off by default.
-    DI_CONFLUENCE_ENABLED: bool = os.getenv('DI_CONFLUENCE_ENABLED', 'false').lower() == 'true'
+    # Confirmation gate: area of value — reject when price is more than AOV_PULLBACK_ATR
+    # x ATR beyond H1 EMA20 (don't chase). Default ON.
+    AREA_OF_VALUE_ENABLED: bool = os.getenv('AREA_OF_VALUE_ENABLED', 'true').lower() == 'true'
+    AOV_PULLBACK_ATR: float = float(os.getenv('AOV_PULLBACK_ATR', '1.5'))
+    # Confirmation gate: RSI must tick in the trade direction on the latest bar. Default ON.
+    RSI_TRIGGER_ENABLED: bool = os.getenv('RSI_TRIGGER_ENABLED', 'true').lower() == 'true'
     # TP is constructed as SL distance x DEFAULT_TAKE_PROFIT_RATIO, so the RR gate
     # default must not exceed that ratio or every signal is rejected.
     MIN_RR_RATIO: float = float(os.getenv('MIN_RR_RATIO', '2.0'))
@@ -224,7 +227,7 @@ class Settings:
         print(f"  Environment: {cls.OANDA_ENVIRONMENT}")
         print(f"  Paper Trading: {cls.PAPER_TRADING_MODE}")
         print(f"  Timeframe: {cls.TIMEFRAME}")
-        print(f"  Min Confluences: {cls.MIN_CONFLUENCES}")
+        print(f"  ADX Min Trend: {cls.ADX_MIN_TREND}")
         print(f"  Max Risk per Trade: {cls.MAX_RISK_PER_TRADE*100}%")
         print(f"  Max Total Exposure: {cls.MAX_TOTAL_EXPOSURE*100}%")
         print(f"  Alerts Enabled: {cls.ALERT_ENABLED}")

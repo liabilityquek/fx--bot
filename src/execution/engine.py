@@ -32,7 +32,8 @@ from src.risk import (
 )
 from src.risk.emergency_controller import EmergencyRiskController, ShutdownReason
 from src.execution.trade_manager import TradeManager
-from src.voting.engine import DecisionResult, DecisionEngine, _count_indicator_confluences
+from src.voting.engine import DecisionResult, DecisionEngine
+from src.agents.indicators import to_dataframe, ema20_pullback_ok, rsi_turning_ok
 from src.agents.base import Signal
 from src.news.suspension_manager import SuspensionManager
 from src.risk.conflict_checker import TradeConflictChecker
@@ -473,14 +474,6 @@ class TradingEngine:
                 htf_candles['H4'] = h4
         except Exception:
             pass
-        m15_candles: list = []
-        try:
-            m15 = self.broker.get_historical_candles(pair, granularity='M15', count=settings.M15_CANDLE_COUNT) or []
-            if m15:
-                htf_candles['M15'] = m15
-                m15_candles = m15
-        except Exception:
-            pass
 
         # Run decision pipeline
         result: DecisionResult = self.decision_engine.run_decision(pair, candles, price, pair_prices=self._cycle_pair_prices, htf_candles=htf_candles)
@@ -488,38 +481,16 @@ class TradingEngine:
 
         if result.final_signal == Signal.HOLD:
             self.logger.info(
-                f"{pair}: HOLD (confidence={result.confidence:.2f} | "
-                f"confluences={result.confluence_count})"
+                f"{pair}: HOLD (confidence={result.confidence:.2f})"
             )
             return
 
         is_long = result.final_signal == Signal.BUY
 
-        # Phase 1.0: ADX trending pre-gate — reject trades in ranging/choppy markets
-        if not _is_adx_trending(result.indicators, settings.ADX_MIN_TREND):
-            self.logger.info(
-                f"{pair}: REJECTED — ADX below {settings.ADX_MIN_TREND}, market is ranging (ADX={result.indicators.get('adx')})"
-            )
-            return
-
         # Phase 1.0a: H4 trend alignment hard gate — never fight the higher timeframe
         if settings.HTF_ALIGNMENT_ENABLED and not _htf_trend_aligned(htf_candles.get('H4'), is_long):
             self.logger.info(
                 f"{pair}: REJECTED — {'BUY' if is_long else 'SELL'} signal contradicts H4 EMA20/50 trend"
-            )
-            return
-
-        # Phase 1.1: Confluence validation (count already set by decision engine)
-        min_confluences = settings.MIN_CONFLUENCES
-        self.logger.info(
-            f"{pair}: confluence check — {result.confluence_count}/{min_confluences} "
-            f"[{', '.join(result.confluence_types) if result.confluence_types else 'none'}] "
-            f"({'PASS' if result.confluence_count >= min_confluences else 'FAIL'})"
-        )
-        if result.confluence_count < min_confluences:
-            self.logger.info(
-                f"{pair}: REJECTED — insufficient confluences "
-                f"({result.confluence_count} < {min_confluences} required)"
             )
             return
 
@@ -581,11 +552,22 @@ class TradingEngine:
             )
             return
 
-        # M15 momentum gate — block if short-term momentum contradicts signal
-        if m15_candles and not _m15_momentum_aligned(m15_candles, is_long):
+        # Confirmation gate: area of value — don't chase price far from EMA20
+        if settings.AREA_OF_VALUE_ENABLED and ema20_pullback_ok(
+            price, result.indicators.get('ema20'), result.indicators.get('atr'),
+            settings.AOV_PULLBACK_ATR, is_long,
+        ) is False:
             self.logger.info(
-                f"{pair}: M15 momentum gate blocked — "
-                f"{'BUY' if is_long else 'SELL'} signal conflicts with M15 short-term direction"
+                f"{pair}: REJECTED — area-of-value gate: price overextended from EMA20 "
+                f"(price={price}, ema20={result.indicators.get('ema20')}, atr={result.indicators.get('atr')})"
+            )
+            return
+
+        # Confirmation gate: RSI-turning trigger — RSI must tick in the trade direction
+        if settings.RSI_TRIGGER_ENABLED and rsi_turning_ok(to_dataframe(candles), is_long) is False:
+            self.logger.info(
+                f"{pair}: REJECTED — RSI-turning trigger: RSI not ticking "
+                f"{'up' if is_long else 'down'} on latest bar"
             )
             return
 
@@ -905,12 +887,10 @@ class TradingEngine:
     ) -> None:
         """Send plain-text decision alert to Telegram."""
         prefix = "DRY RUN -- " if dry_run else ""
-        min_conf_display = settings.MIN_CONFLUENCES
         lines = [
             f"{prefix}TRADE OPENED -- {pair}",
             f"Direction: {result.final_signal.value}",
-            f"Confluences: {result.confluence_count}/{min_conf_display} "
-            f"[{', '.join(result.confluence_types)}]",
+            f"Reasoning: {result.reasoning}",
             f"Entry: {entry_price:.5f}",
             f"SL: {stop_loss:.5f} | TP: {take_profit:.5f}",
             f"Size: {units / 100_000:.2f} lots",
@@ -922,8 +902,7 @@ class TradingEngine:
     def _log_vote_result(self, result: DecisionResult) -> None:
         self.logger.info(
             f"{result.pair}: {result.final_signal.value} "
-            f"conf={result.confidence:.2f} | "
-            f"confluences={result.confluence_count} [{', '.join(result.confluence_types)}]"
+            f"conf={result.confidence:.2f} | {result.reasoning}"
         )
 
     # ------------------------------------------------------------------
@@ -997,39 +976,11 @@ def _get_atr_multiplier(atr_val: float, candles: List[Dict], atr_period: int = 1
     return 2.0
 
 
-def _m15_momentum_aligned(m15_candles: list, is_long: bool) -> bool:
-    """
-    Returns True if the last 5 M15 candles support the intended direction.
-    Blocks only when momentum clearly contradicts — ambiguous/flat = allowed.
-    """
-    recent = m15_candles[-5:] if len(m15_candles) >= 5 else m15_candles
-    if len(recent) < 3:
-        return True  # insufficient data — ambiguous, allow per design
-
-    bullish = sum(
-        1 for c in recent
-        if float(c.get('close', 0) or c.get('mid', {}).get('c', 0)) >
-           float(c.get('open',  0) or c.get('mid', {}).get('o', 0))
-    )
-    bearish = len(recent) - bullish
-
-    first_close = float(recent[0].get('close', 0) or recent[0].get('mid', {}).get('c', 0))
-    last_close  = float(recent[-1].get('close', 0) or recent[-1].get('mid', {}).get('c', 0))
-    net_move = last_close - first_close
-
-    # Require 60% of candles to align with trade direction (not just a simple majority)
-    threshold = len(recent) * 0.6
-    if is_long:
-        return bullish >= threshold
-    else:
-        return bearish >= threshold
-
-
 def _htf_trend_aligned(h4_candles: Optional[List[Dict]], is_long: bool) -> bool:
     """
     True when the H4 EMA20/50 trend agrees with the trade direction.
     Missing or insufficient data is treated as aligned (gate only blocks on
-    a clear contradiction, mirroring the M15 momentum gate's design).
+    a clear contradiction).
     """
     if not h4_candles or len(h4_candles) < 55:
         return True
@@ -1043,12 +994,6 @@ def _htf_trend_aligned(h4_candles: Optional[List[Dict]], is_long: bool) -> bool:
     if ema20 is None or ema50 is None:
         return True
     return ema20 > ema50 if is_long else ema20 < ema50
-
-
-def _is_adx_trending(indicators: dict, min_adx: float = settings.ADX_MIN_TREND) -> bool:
-    """Return True if ADX confirms a trending market (strength gate, direction-agnostic)."""
-    adx_val = indicators.get('adx')
-    return adx_val is not None and adx_val >= min_adx
 
 
 def _infer_close_reason(trade, close_price: float) -> str:

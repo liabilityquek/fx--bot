@@ -1,6 +1,7 @@
-"""Confluence-direction picker checks for the deterministic DecisionEngine.
+"""Direction + confirmation-gate checks for the deterministic DecisionEngine.
 
-Bullish-skewed indicators -> BUY, bearish -> SELL, balanced/insufficient -> HOLD.
+DMI/ADX owns direction (ADX>=min gives permission, +DI vs -DI gives the side).
+The two ported confirmation gates (area-of-value, RSI-turning) are pure functions.
 
 Run with:
     python -m pytest tests/test_decision_confluence.py -v
@@ -14,24 +15,17 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from config.settings import settings
 from src.agents.base import Signal
-from src.voting.engine import DecisionEngine, _count_indicator_confluences
+from src.voting.engine import DecisionEngine, _dmi_direction
+from src.agents.indicators import ema20_pullback_ok, rsi_turning_ok, to_dataframe
 
 
 PRICE = 1.1000
+_MIN = settings.ADX_MIN_TREND
 
-# bb_mid set so price 1.1000 sits >15% of the band above/below the midline.
-_BULLISH = {
-    'rsi': 60, 'macd_hist': 0.5, 'trend': 'bullish', 'fisher': 1.2,
-    'bb_upper': 1.1050, 'bb_lower': 1.0950, 'bb_mid': 1.0980,
-    'market_structure': 'bullish_structure',
-}
-_BEARISH = {
-    'rsi': 40, 'macd_hist': -0.5, 'trend': 'bearish', 'fisher': -1.2,
-    'bb_upper': 1.1050, 'bb_lower': 1.0950, 'bb_mid': 1.1020,
-    'market_structure': 'bearish_structure',
-}
-# One indicator each way, nothing else → tie at low count.
-_BALANCED = {'rsi': 60, 'macd_hist': -0.5}
+_BUY = {'adx': _MIN + 7, 'plus_di': 30.0, 'minus_di': 12.0}
+_SELL = {'adx': _MIN + 7, 'plus_di': 12.0, 'minus_di': 30.0}
+_RANGING = {'adx': _MIN - 5, 'plus_di': 30.0, 'minus_di': 12.0}
+_TIE = {'adx': _MIN + 7, 'plus_di': 20.0, 'minus_di': 20.0}
 
 
 def _engine_with(indicators):
@@ -42,45 +36,72 @@ def _engine_with(indicators):
     return eng
 
 
-def test_bullish_indicators_produce_buy():
-    res = _engine_with(_BULLISH).run_decision("EUR_USD", [], PRICE)
-    assert res.final_signal == Signal.BUY
-    assert res.confluence_count >= settings.MIN_CONFLUENCES
+# ---- direction ------------------------------------------------------------
+
+def test_adx_ok_plus_di_leads_buys():
+    assert _dmi_direction(_BUY)[0] == Signal.BUY
+    assert _engine_with(_BUY).run_decision("EUR_USD", [], PRICE).final_signal == Signal.BUY
 
 
-def test_bearish_indicators_produce_sell():
-    res = _engine_with(_BEARISH).run_decision("EUR_USD", [], PRICE)
-    assert res.final_signal == Signal.SELL
-    assert res.confluence_count >= settings.MIN_CONFLUENCES
+def test_adx_ok_minus_di_leads_sells():
+    assert _dmi_direction(_SELL)[0] == Signal.SELL
+    assert _engine_with(_SELL).run_decision("EUR_USD", [], PRICE).final_signal == Signal.SELL
 
 
-def test_balanced_or_insufficient_holds():
-    res = _engine_with(_BALANCED).run_decision("EUR_USD", [], PRICE)
-    assert res.final_signal == Signal.HOLD
+def test_adx_below_min_holds():
+    assert _dmi_direction(_RANGING)[0] == Signal.HOLD
+    res = _engine_with(_RANGING).run_decision("EUR_USD", [], PRICE)
+    assert res.final_signal == Signal.HOLD and res.confidence == 0.0
 
 
-def test_counter_mirror_is_opposite():
-    long_c, _ = _count_indicator_confluences(_BULLISH, True, PRICE)
-    short_c, _ = _count_indicator_confluences(_BULLISH, False, PRICE)
-    assert long_c == 6 and short_c == 0
+def test_di_tie_holds():
+    assert _dmi_direction(_TIE)[0] == Signal.HOLD
 
 
-def test_di_confluence_only_counts_when_enabled():
-    from unittest.mock import patch
-    bull_di = {**_BULLISH, 'plus_di': 30.0, 'minus_di': 10.0}
-    # Off by default → DI ignored, still 6.
-    with patch.object(settings, 'DI_CONFLUENCE_ENABLED', False):
-        assert _count_indicator_confluences(bull_di, True, PRICE)[0] == 6
-    # Enabled → +DI>-DI adds a 7th on the long side, 0 on the short side.
-    with patch.object(settings, 'DI_CONFLUENCE_ENABLED', True):
-        long_c, long_t = _count_indicator_confluences(bull_di, True, PRICE)
-        short_c, _ = _count_indicator_confluences(bull_di, False, PRICE)
-        assert long_c == 7 and 'DI' in long_t and short_c == 0
+def test_missing_dmi_holds():
+    assert _dmi_direction({})[0] == Signal.HOLD
+    assert _dmi_direction({'adx': _MIN + 7})[0] == Signal.HOLD
+
+
+# ---- confirmation gate: area of value -------------------------------------
+
+def test_area_of_value_long():
+    # at EMA20 -> pass; beyond ema20 + tol*atr -> fail; mirror for short.
+    assert ema20_pullback_ok(1.1000, 1.1000, 0.0010, 1.5, True) is True
+    assert ema20_pullback_ok(1.1030, 1.1000, 0.0010, 1.5, True) is False
+    assert ema20_pullback_ok(1.1000, 1.1000, 0.0010, 1.5, False) is True
+    assert ema20_pullback_ok(1.0970, 1.1000, 0.0010, 1.5, False) is False
+
+
+def test_area_of_value_missing_is_none():
+    assert ema20_pullback_ok(1.1000, None, 0.0010, 1.5, True) is None
+    assert ema20_pullback_ok(1.1000, 1.1000, None, 1.5, True) is None
+    assert ema20_pullback_ok(1.1000, 1.1000, 0.0, 1.5, True) is None
+
+
+# ---- confirmation gate: RSI turning ---------------------------------------
+
+def _candles(closes):
+    return [{'open': c, 'high': c + 0.05, 'low': c - 0.05, 'close': c, 'volume': 100} for c in closes]
+
+_RISING_TAIL = [100, 100, 100, 100, 100, 99, 98, 97, 96, 95, 94, 93, 92, 91, 90, 92, 94, 96, 98, 100, 103]
+_FALLING_TAIL = [90, 90, 90, 90, 90, 91, 92, 93, 94, 95, 96, 97, 98, 99, 100, 98, 96, 94, 92, 90, 87]
+
+
+def test_rsi_turning_up_confirms_long():
+    df = to_dataframe(_candles(_RISING_TAIL))
+    assert rsi_turning_ok(df, True) is True
+    assert rsi_turning_ok(df, False) is False
+
+
+def test_rsi_turning_down_confirms_short():
+    df = to_dataframe(_candles(_FALLING_TAIL))
+    assert rsi_turning_ok(df, False) is True
+    assert rsi_turning_ok(df, True) is False
 
 
 if __name__ == "__main__":
-    test_bullish_indicators_produce_buy()
-    test_bearish_indicators_produce_sell()
-    test_balanced_or_insufficient_holds()
-    test_counter_mirror_is_opposite()
+    for name, fn in list(globals().items()):
+        if name.startswith("test_") and callable(fn):
+            fn()
     print("ok")

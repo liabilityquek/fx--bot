@@ -19,32 +19,15 @@ class TrendAgent(BaseAgent):
         result = {}
 
         ema20 = ema(df, 20)
-        ema50 = ema(df, 50)
         adx_val, plus_di, minus_di = adx_components(df, 14)
 
         if ema20 is not None:
             result['ema20'] = ema20
-        if ema50 is not None:
-            result['ema50'] = ema50
         if adx_val is not None:
             result['adx'] = round(adx_val, 4)
         if plus_di is not None and minus_di is not None:
             result['plus_di'] = round(plus_di, 4)
             result['minus_di'] = round(minus_di, 4)
-
-        if ema20 is not None and ema50 is not None:
-            if ema20 > ema50:
-                result['trend'] = 'bullish'
-            elif ema20 < ema50:
-                result['trend'] = 'bearish'
-            else:
-                result['trend'] = 'neutral'
-
-        ms = market_structure(df)
-        if ms is not None:
-            result['market_structure'] = ms[0]
-            result['nearest_resistance'] = round(ms[1], 5)
-            result['nearest_support'] = round(ms[2], 5)
 
         return result
 

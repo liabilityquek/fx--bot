@@ -90,7 +90,6 @@ def run_test(broker: OandaBroker, decision_engine: DecisionEngine, logger) -> bo
             print(f"\n{pair} DecisionResult:")
             print(f"  Final signal    : {result.final_signal.value}")
             print(f"  Confidence      : {result.confidence:.4f}")
-            print(f"  Confluences     : {result.confluence_count} [{', '.join(result.confluence_types)}]")
             print(f"  Reasoning       : {result.reasoning}")
 
         except Exception as exc:

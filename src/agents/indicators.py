@@ -329,3 +329,61 @@ def market_structure(
     support = max(below) if below else swing_lows[-1]
 
     return label, resistance, support
+
+
+# ---------------------------------------------------------------------------
+# Entry filters — area of value (EMA20 pullback) + trigger (RSI turning)
+# ---------------------------------------------------------------------------
+
+def ema20_pullback_ok(
+    price: float,
+    ema20: Optional[float],
+    atr_val: Optional[float],
+    tol_atr: float,
+    is_long: bool,
+) -> Optional[bool]:
+    """Area of value: True when price is not overextended from EMA20.
+
+    BUY passes while price <= ema20 + tol_atr*ATR (not chasing far above the mean);
+    SELL is the mirror. Deep pullbacks past EMA20 still pass while the trend holds.
+    None when ema20/ATR are unavailable.
+    """
+    if ema20 is None or atr_val is None or atr_val <= 0:
+        return None
+    if is_long:
+        return bool(price <= ema20 + tol_atr * atr_val)
+    return bool(price >= ema20 - tol_atr * atr_val)
+
+
+def rsi_turning_ok(df: pd.DataFrame, is_long: bool, period: int = 14) -> Optional[bool]:
+    """Trigger: True when RSI ticks in the trade direction vs the prior bar.
+
+    BUY needs RSI rising, SELL needs RSI falling. None when RSI can't be computed
+    on either the latest or the prior bar.
+    """
+    now = rsi(df, period)
+    prev = rsi(df.iloc[:-1], period)
+    if now is None or prev is None:
+        return None
+    return bool(now > prev) if is_long else bool(now < prev)
+
+
+if __name__ == '__main__':
+    # Area of value — deterministic
+    assert ema20_pullback_ok(100.0, 100.0, 1.0, 1.5, True) is True    # at mean
+    assert ema20_pullback_ok(101.0, 100.0, 1.0, 1.5, True) is True    # within tolerance
+    assert ema20_pullback_ok(102.0, 100.0, 1.0, 1.5, True) is False   # chasing above
+    assert ema20_pullback_ok(99.0, 100.0, 1.0, 1.5, False) is True    # short mirror
+    assert ema20_pullback_ok(98.0, 100.0, 1.0, 1.5, False) is False   # chasing below
+    assert ema20_pullback_ok(100.0, None, 1.0, 1.5, True) is None     # missing ema
+    assert ema20_pullback_ok(100.0, 100.0, 0.0, 1.5, True) is None    # bad atr
+
+    # RSI turning — steep late rally => RSI rising bar-over-bar
+    _closes = [100, 100, 100, 100, 100, 99, 98, 97, 96, 95,
+               94, 93, 92, 91, 90, 92, 94, 96, 98, 100, 103]
+    _df = pd.DataFrame({'open': _closes, 'high': _closes, 'low': _closes, 'close': _closes})
+    assert rsi_turning_ok(_df, True) is True
+    assert rsi_turning_ok(_df, False) is False
+    assert rsi_turning_ok(_df.iloc[:5], True) is None   # insufficient data
+
+    print('indicators self-check OK')
